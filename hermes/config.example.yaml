@@ -1,0 +1,38 @@
+# Hermes example config — copy values via `hermes model` / `hermes gateway setup`.
+# Model: Groq named custom provider (custom:groq) or nothing. Discord: bot gateway.
+custom_providers:
+  - name: groq
+    base_url: https://api.groq.com/openai/v1
+    key_env: GROQ_API_KEY
+    api_mode: chat_completions
+model:
+  provider: custom:groq
+  default: qwen/qwen3.8-27b
+
+# GROQ_API_KEY goes in ~/.hermes/.env (or container env).
+
+mcp_servers:
+  tinyfish:
+    url: https://agent.tinyfish.ai/mcp
+    auth: oauth
+    tools:
+      include: [search, fetch]
+  playwright:
+    command: npx
+    args: ["-y", "@playwright/mcp@latest", "--headless"]
+    idle_timeout_seconds: 900
+    max_lifetime_seconds: 86400
+
+platforms:
+  discord:
+    enabled: true
+    require_mention: true
+    auto_thread: true
+    free_response_channels:
+      - 1547681840628764854
+    # allow-all users is granted via DISCORD_ALLOW_ALL_USERS=true in .env
+    # channel_prompts:
+    #   "1547681840628764854": "You are the Lost Son of Managed Democracy. Serial [REDACTED]. Controlled cold rage."
+
+terminal:
+  backend: docker
