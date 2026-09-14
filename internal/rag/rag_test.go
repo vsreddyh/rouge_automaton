@@ -39,4 +39,12 @@ func TestScore(t *testing.T) {
 	if Score("how to kill hulk bruiser", words, hulk) <= Score("how to kill hulk bruiser", words, other) {
 		t.Fatal("Hulk Bruiser must outrank Agitator")
 	}
+	// Missing text_blob must not panic (review #7.1).
+	bare := bson.M{"name": "Mystery"}
+	if s := Score("mystery", Keywords("mystery"), bare); s < 10 {
+		t.Fatalf("name hit bonus must apply without text_blob, got %v", s)
+	}
+	if got := Keywords("hulk hulk hulk"); len(got) != 1 {
+		t.Fatalf("keywords must dedupe, got %v", got)
+	}
 }
