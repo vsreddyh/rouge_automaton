@@ -13,8 +13,10 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo"
 
 	"github.com/vsreddyh/rouge_automaton/internal/config"
+	"github.com/vsreddyh/rouge_automaton/internal/live"
 	"github.com/vsreddyh/rouge_automaton/internal/persona"
 	"github.com/vsreddyh/rouge_automaton/internal/rag"
+	"github.com/vsreddyh/rouge_automaton/internal/wiki"
 	"github.com/vsreddyh/rouge_automaton/internal/zen"
 )
 
@@ -24,6 +26,7 @@ type Bot struct {
 	Cfg     config.Config
 	DB      *mongo.Database
 	Zen     *zen.Client
+	Live    *live.Client
 }
 
 // New creates a session with the required intents.
@@ -36,7 +39,8 @@ func New(cfg config.Config, db *mongo.Database) (*Bot, error) {
 		discordgo.IntentsGuildMessages |
 		discordgo.IntentMessageContent
 	b := &Bot{Session: s, Cfg: cfg, DB: db,
-		Zen: &zen.Client{BaseURL: cfg.OpenCodeGoBaseURL, APIKey: cfg.OpenCodeGoAPIKey, Model: cfg.Model}}
+		Zen:  &zen.Client{BaseURL: cfg.OpenCodeGoBaseURL, APIKey: cfg.OpenCodeGoAPIKey, Model: cfg.Model},
+		Live: live.New(cfg)}
 	s.AddHandler(b.onMessage)
 	return b, nil
 }
@@ -128,13 +132,13 @@ func (b *Bot) onMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 	ctxText := rag.FormatContext(docs)
 	liveStr := ""
 	if types["L"] {
-		liveStr = liveLine(ctx, b.Cfg, q)
+		liveStr = b.liveLine(ctx, q)
 		if liveStr != "" {
 			ctxText = strings.TrimSpace(ctxText + "\n" + liveStr)
 		}
 	}
 	if len(docs) == 0 && liveStr == "" {
-		if w := wikiFallback(ctx, q); w != "" {
+		if w := b.wikiFallback(ctx, q); w != "" {
 			ctxText = w
 		}
 	}
@@ -149,8 +153,15 @@ func (b *Bot) onMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 	_, _ = s.ChannelMessageSendReply(m.ChannelID, reply, m.Reference())
 }
 
-// wikiFallback and liveLine are stubbed here; real implementations land in
-// the fallbacks PR (internal/wiki, internal/live).
-func wikiFallback(ctx context.Context, query string) string { return "" }
+// wikiFallback and liveLine delegate to the fallback packages. Live uses
+// the Bot-scoped client so its 5-minute cache survives across messages.
+func (b *Bot) wikiFallback(ctx context.Context, query string) string {
+	return wiki.New().SearchFetch(ctx, query)
+}
 
-func liveLine(ctx context.Context, cfg config.Config, query string) string { return "" }
+func (b *Bot) liveLine(ctx context.Context, query string) string {
+	if b.Live == nil {
+		return ""
+	}
+	return b.Live.PlanetLine(ctx, query)
+}
