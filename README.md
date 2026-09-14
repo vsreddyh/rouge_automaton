@@ -1,73 +1,84 @@
 # Rouge Automaton — Lost Son of Managed Democracy
 
-Hermes Discord bot for Helldivers 2 intel, roleplayed as a defected informant trapped in a bot chassis. No Python web app, no custom discord.py. Docker-sandboxed Hermes gateway + skill payload.
+Lightweight Go Discord bot for Helldivers 2 intel, roleplayed as a defected informant trapped in a bot chassis. No Hermes gateway, no Python runtime: a direct Discord gateway plus the OpenCode Go relay, backed by a MongoDB intel store.
 
 ## What it does
 
-- Answers Helldivers 2 intel questions: unit weak points, counters, loadouts, tactics, faction lore.
-- Equal coverage on all 3 factions: Automatons (17 units), Terminids (8), Illuminate (6) in `skills/rouge-automaton/data/*.json`.
+- Answers Helldivers 2 intel questions: unit weak points, counters, loadouts, tactics, faction lore, plus biome/planet/mission context and live war status.
+- Full wiki coverage (~800 docs: units, structures, weapons, stratagems, armor, boosters, biomes, planets, missions) cached in MongoDB and refreshed from the wiki RecentChanges feed.
 - Persona: ex–Super Citizen / Helldiver, captured on Cyberstan, experimented on, escaped into a bot husk. Controlled cold rage, terse, addresses you as "Helldiver", ends transmissions with `Over.`
 - Serial is always `[REDACTED]`. Never invents a name. Never claims to be AI. Never sympathizes with Automatons.
-- On local DB miss: live lookup via TinyFish MCP (`helldivers.wiki.gg`), summarized — weak point + counter + source link.
-- Model rule: Muse Spark 1.3 or nothing (`opencode-go` / `muse-spark-1.3-contributor`). `429` → busy-spreading-democracy reply with liberation ETA. No silent fallback.
+- On local DB miss: live lookup on `helldivers.wiki.gg`, summarized — weak point + counter + source link.
+- Model rule: Muse Spark 1.3 Contributor or nothing (`https://opencode.ai/zen/go`, `muse-spark-1.3-contributor`). `429` → busy-spreading-democracy reply with liberation ETA. No silent fallback.
 
 ## Layout
 
 ```
+cmd/
+  rouge/            # Discord bot entrypoint
+  ingest/           # one-shot Mongo seed from skills/rouge-automaton/data/
+  watch/            # wiki RecentChanges poller, refreshes changed docs
+internal/
+  config/           # .env contract (shared with the retired Python bot)
+  persona/          # SOUL.md → system prompt, Over./serial/voice guards
+  rag/              # Type-U/G/W/L router + keyword retrieval + cited context
+  zen/              # OpenCode Go relay client (Responses API)
+  discord/          # discordgo gateway: allowlist, mention gate, threads
+  wiki/             # helldivers.wiki.gg fallback (search + fetch)
+  live/             # live war-status API (Type-L)
+  wikifeed/         # RecentChanges Atom feed + MediaWiki API client
+  wikiparse/        # wikitext parsers (infobox, anatomy, tactics, biomes)
+  wikiwatch/        # feed-vs-tracked_pages diff + doc refresh
 skills/rouge-automaton/
-  SKILL.md          # procedure: SOUL.md → data/*.json → TinyFish → model rule
-  SOUL.md           # identity / voice / radio procedure (installed as slot #1 SOUL.md)
-  data/
-    automatons.json # 17 units
-    terminids.json  # 8 units
-    illuminate.json # 6 units
-hermes/
-  config.example.yaml # OpenCode Go provider (muse-spark-1.3-contributor), MCP (tinyfish, playwright), Discord
-Dockerfile            # python:3.12-slim + nodejs 22 + hermes-agent, copies skill payload
-docker-compose.yml    # single `hermes` service, `hermes-home` volume, `restart: unless-stopped`
-.env.example          # DISCORD_BOT_TOKEN, DISCORD_ALLOWED_USERS, OPENCODE_GO_API_KEY
+  SOUL.md           # identity / voice / radio procedure (embedded in binary)
+  data/             # seed intel (authoritative seeds, wiki enriches in Mongo)
+ContainerfileGo     # multi-stage static build → distroless (~30–45MB)
+podman-compose.go.yml # bot-go + watcher-go + mongo (Podman only, no Docker)
+.env.example        # DISCORD_BOT_TOKEN, DISCORD_ALLOWED_USERS, OPENCODE_GO_API_KEY, ...
 ```
 
-Container boot (`Dockerfile` CMD) copies `skills-source/*` → `$HERMES_HOME/skills/` and `SOUL.md` → `$HERMES_HOME/SOUL.md`, then `exec hermes gateway`.
+Container boot: the image embeds `SOUL.md` at compile time; `skills/` on disk is only needed for the one-shot `ingest` seed. Runtime config comes from `.env`.
 
-## Run (sandboxed)
+## Run (Podman)
 
 ```bash
-cp .env.example .env   # fill: DISCORD_BOT_TOKEN, DISCORD_ALLOWED_USERS, OPENCODE_GO_API_KEY
-docker compose build
-docker compose up -d
+cp .env.example .env   # fill: DISCORD_BOT_TOKEN, OPENCODE_GO_API_KEY, X_SUPER_CONTACT, ...
+podman build --network=host -f ContainerfileGo -t rouge-automaton-go .
+podman-compose -f podman-compose.go.yml up -d
 ```
 
-One-time Hermes setup inside the container:
+Green-field Mongo is empty on first boot — seed it once:
 
 ```bash
-docker compose exec hermes hermes model
-# Model -> `opencode-go` provider (OPENCODE_GO_API_KEY), model = muse-spark-1.3-contributor
-docker compose exec hermes hermes gateway setup   # Discord token + allowlist
-docker compose exec hermes hermes gateway         # foreground test
+podman run --rm --network=host -e MONGO_URI=mongodb://127.0.0.1:27017/rouge \
+  localhost/rouge-automaton-go:latest /ingest
 ```
 
-`.env` keys used: `DISCORD_BOT_TOKEN`, `DISCORD_ALLOWED_USERS` (also `DISCORD_ALLOW_ALL_USERS`, `DISCORD_HOME_CHANNEL`, `DISCORD_FREE_RESPONSE_CHANNELS`), `OPENCODE_GO_API_KEY` (Muse Spark 1.3 via OpenCode Go relay).
+`.env` keys used: `DISCORD_BOT_TOKEN`, `DISCORD_ALLOWED_USERS` (also `DISCORD_ALLOW_ALL_USERS`, `DISCORD_FREE_RESPONSE_CHANNELS`), `OPENCODE_GO_API_KEY`, `OPENCODE_GO_BASE_URL`, `MODEL`, `MONGO_URI`, `X_SUPER_CLIENT`, `X_SUPER_CONTACT`.
 
-## Discord behavior (`hermes/config.example.yaml`)
+## Discord behavior
 
-- `platforms.discord.enabled: true`, `require_mention: true`, `auto_thread: true`.
-- `free_response_channels` (e.g. `1547681840628764854`) reply without mention.
+- Mention-gated replies (`require_mention: true`), `auto_thread: true`; configured free-response channels answer without a mention (each costs a model call — keep the list short).
 - Greetings (`hi`/`hello`/`hey`): one flat line, e.g. `Helldiver. Make it quick.` — no helpdesk intro, no capability list.
-- Every intel answer: weak point + counter + source (data file or live link).
+- Every intel answer: weak point + counter + source (Mongo doc or live link).
 
-## Skill procedure (`skills/rouge-automaton/SKILL.md`)
+## Answer pipeline
 
-1. Identity questions → answer from `SOUL.md` (`${HERMES_SKILL_DIR}`).
-2. Unit intel → search `data/*.json` first, report weak points + counters + 1–2 doctrine lines, cite file.
-3. Miss → TinyFish `search`/`fetch` on `helldivers.wiki.gg`, summarize with links.
-4. Rate limit (`429`) → exact reply: `The Lost Son is busy spreading democracy on Cyberstan. Hold position, Helldiver — try again shortly. Estimated time of liberation: {n}s.` Other backend failures → `Uplink dead. No fallback. For Super Earth, try later.`
+1. Identity questions → answer from `SOUL.md` canon. Serial stays `[REDACTED]`.
+2. Unit intel → route by faction vocabulary, rank Mongo candidates by keyword overlap + name/alias bonus, inject top docs with citations.
+3. Gear / world questions → same router over weapons/stratagems/armor (Type-G) and biomes/planets/missions (Type-W); multi-intent queries fan out and merge.
+4. Miss → `helldivers.wiki.gg` search + fetch (1+1 max), summarized with links. Live-status questions → community war API.
+5. Rate limit (`429`) → exact reply: `The Lost Son is busy spreading democracy on Cyberstan. Hold position, Helldiver — try again shortly. Estimated time of liberation: {n}s.` Other backend failures → `Uplink dead. No fallback. For Super Earth, try later.`
 
 Doctrine reminders: flank Hulk/Tank rear vents, Flare Trooper first, objectives (fabricators / bug holes / warp ships) before heavies.
+
+## Freshness
+
+The `watcher-go` service polls the wiki RecentChanges Atom feed every 5 minutes, diffs revision ids against Mongo `tracked_pages`, and re-parses only changed pages (curated seed fields are preserved). Wiki `robots.txt` allows reference/RAG use (`use=reference`); the poller identifies itself and honors `If-Modified-Since`/`Retry-After`.
 
 ## Troubleshooting
 
 - `429` / rate limit → expected, wait for liberation ETA (uses `Retry-After` when present).
-- Gateway silent in Discord → check token/allowlist via `hermes gateway setup`, confirm `require_mention` vs free-response channel.
-- Skill not found → `docker compose exec hermes ls $HERMES_HOME/skills/` should show `rouge-automaton/`; rebuild if `skills-source/` is stale.
-- MCP fetch failing → TinyFish needs OAuth; Playwright needs `npx` (bundled via nodejs 22 in image).
+- Gateway silent in Discord → check token/allowlist in `.env`, confirm mention vs free-response channel.
+- No answers, `Uplink dead` → relay key/balance or network; logs show the backend error class.
+- Stale intel → check `watcher-go` logs; force one pass with `/watch --once`.
