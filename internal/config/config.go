@@ -25,7 +25,7 @@ type Config struct {
 }
 
 func getenv(key, def string) string {
-	if v := os.Getenv(key); v != "" {
+	if v, ok := os.LookupEnv(key); ok {
 		return v
 	}
 	return def
