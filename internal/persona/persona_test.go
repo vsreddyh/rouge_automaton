@@ -32,7 +32,12 @@ func TestPostprocess(t *testing.T) {
 }
 
 func TestSystemPrompt(t *testing.T) {
-	if !strings.Contains(SystemPrompt(), "Helldiver") {
-		t.Fatal("system prompt must carry the SOUL voice")
+	// Suffix alone contains "Helldiver", so assert on SOUL-specific canon.
+	if got := SystemPrompt(); !strings.Contains(got, "Lost Son of Managed Democracy") {
+		t.Fatal("system prompt must carry SOUL.md canon")
+	}
+	t.Setenv("SKILLS_DIR", t.TempDir())
+	if got := SystemPrompt(); !strings.Contains(got, "Lost Son of Managed Democracy") {
+		t.Fatal("invalid SKILLS_DIR must fall back to embedded SOUL.md")
 	}
 }
