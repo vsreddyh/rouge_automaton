@@ -33,6 +33,18 @@ services:
     restart: unless-stopped
     depends_on:
       - mongo
+  watcher-go:
+    image: localhost/rouge-automaton-go:latest
+    container_name: rouge-watcher-go
+    network_mode: host
+    entrypoint: ["/watch"]
+    command: ["--interval", "5m"]
+    env_file: .env
+    environment:
+      MONGO_URI: mongodb://127.0.0.1:27017/rouge
+    restart: unless-stopped
+    depends_on:
+      - mongo
   mongo:
     image: docker.io/library/mongo:7-jammy
     container_name: rouge-mongo-go
