@@ -1,6 +1,6 @@
 module github.com/vsreddyh/rouge_automaton
 
-go 1.24
+go 1.25.0
 
 toolchain go1.25.14
 

@@ -69,11 +69,13 @@ func FactionOf(query string) string {
 	return ""
 }
 
-// Keywords extracts significant lowercase terms.
+// Keywords extracts significant lowercase terms, deduplicated.
 func Keywords(query string) []string {
 	var out []string
+	seen := map[string]bool{}
 	for _, w := range wordRe.FindAllString(strings.ToLower(query), -1) {
-		if len(w) > 2 && !Stop[w] {
+		if len(w) > 2 && !Stop[w] && !seen[w] {
+			seen[w] = true
 			out = append(out, w)
 		}
 	}
@@ -100,16 +102,17 @@ func strList(m bson.M, key string) []string {
 }
 
 func docName(m bson.M) string {
-	if s, ok := m["name"].(string); ok {
+	if s, ok := m["name"].(string); ok && s != "" {
 		return s
 	}
-	return ""
+	return "?"
 }
 
 // Score ranks a doc: keyword occurrence counts plus a name/alias hit bonus.
 func Score(query string, words []string, d bson.M) float64 {
 	name := docName(d)
-	blob := strings.ToLower(d["text_blob"].(string) + " " + name)
+	tb, _ := d["text_blob"].(string)
+	blob := strings.ToLower(tb + " " + name)
 	var s float64
 	for _, w := range words {
 		s += float64(strings.Count(blob, w))
@@ -208,6 +211,9 @@ func SearchWorld(ctx context.Context, db *mongo.Database, query string, k int) [
 		extra = append(extra, findAll(ctx, db, coll, bson.M{}, 120)...)
 	}
 	rank(query, words, extra)
+	if len(extra) > 2 {
+		extra = extra[:2]
+	}
 	out = append(out, extra...)
 	if len(out) > k+4 {
 		out = out[:k+4]
@@ -216,6 +222,9 @@ func SearchWorld(ctx context.Context, db *mongo.Database, query string, k int) [
 }
 
 // Retrieve fans out across routed types, max ~5 docs.
+//
+// TODO: L-only queries return no docs (same gap as the Python port); the
+// caller serves those from the live status API instead.
 func Retrieve(ctx context.Context, db *mongo.Database, query string) ([]bson.M, map[string]bool) {
 	types := Route(query)
 	var docs []bson.M

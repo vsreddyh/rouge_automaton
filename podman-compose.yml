@@ -1,0 +1,35 @@
+services:
+  bot:
+    image: localhost/rouge-automaton:latest
+    container_name: rouge-automaton
+    network_mode: host
+    env_file: .env
+    environment:
+      MONGO_URI: mongodb://127.0.0.1:27017/rouge
+    restart: unless-stopped
+    depends_on:
+      - mongo
+  watcher:
+    image: localhost/rouge-automaton:latest
+    container_name: rouge-watcher
+    network_mode: host
+    env_file: .env
+    environment:
+      MONGO_URI: mongodb://127.0.0.1:27017/rouge
+    command: ["python", "scripts/rss_watch.py", "--interval", "300"]
+    restart: unless-stopped
+    depends_on:
+      - mongo
+  mongo:
+    image: docker.io/library/mongo:7-jammy
+    container_name: rouge-mongo-compose
+    ports:
+      - "127.0.0.1:27017:27017"
+    volumes:
+      - mongo-data:/data/db
+    restart: unless-stopped
+
+volumes:
+  mongo-data:
+    external: true
+    name: rouge-mongo-data
