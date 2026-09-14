@@ -2,6 +2,7 @@
 package config
 
 import (
+	"net/url"
 	"os"
 	"strings"
 )
@@ -89,4 +90,13 @@ func Load() Config {
 // admits everyone, otherwise the ID must be in the allowlist.
 func (c Config) Allowed(userID string) bool {
 	return c.AllowAllUsers || c.AllowedUsers[userID]
+}
+
+// DBName returns the Mongo database name from the URI path, defaulting to rouge.
+func (c Config) DBName() string {
+	u, err := url.Parse(c.MongoURI)
+	if err != nil || u.Path == "" || u.Path == "/" {
+		return "rouge"
+	}
+	return strings.TrimPrefix(u.Path, "/")
 }
