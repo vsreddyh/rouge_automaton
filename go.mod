@@ -4,9 +4,13 @@ go 1.25.0
 
 toolchain go1.25.14
 
-require go.mongodb.org/mongo-driver/v2 v2.9.1
+require (
+	github.com/bwmarrin/discordgo v0.29.0
+	go.mongodb.org/mongo-driver/v2 v2.9.1
+)
 
 require (
+	github.com/gorilla/websocket v1.4.2 // indirect
 	github.com/klauspost/compress v1.19.2 // indirect
 	github.com/xdg-go/pbkdf2 v1.0.0 // indirect
 	github.com/xdg-go/scram v1.2.0 // indirect
