@@ -7,8 +7,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"regexp"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -37,19 +40,29 @@ type Client struct {
 // Chat sends system instructions + history + query, returns model text or a
 // canned failure reply. Session should be stable per conversation (thread ID).
 func (c *Client) Chat(ctx context.Context, system, query string, history []Message, session string) string {
-	if len(history) > 10 {
-		history = history[len(history)-10:]
+	var input []Message
+	for _, m := range history {
+		if strings.TrimSpace(m.Content) == "" {
+			continue
+		}
+		input = append(input, m)
+		if len(input) >= 10 {
+			input = input[len(input)-10:]
+		}
 	}
-	input := append(append([]Message{}, history...), Message{Role: "user", Content: query})
+	input = append(input, Message{Role: "user", Content: query})
+	if strings.TrimSpace(session) == "" {
+		session = "rouge-main"
+	}
+	url := strings.TrimSuffix(c.BaseURL, "/") + "/v1/responses"
 	body, _ := json.Marshal(map[string]any{
 		"model": c.Model, "instructions": system, "input": input,
 		"max_output_tokens": 1024, "temperature": 0.6,
 		"reasoning": map[string]any{"effort": "low"},
 	})
-	ctx, cancel := context.WithTimeout(ctx, 90*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, "POST",
-		c.BaseURL+"/v1/responses", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
 	if err != nil {
 		return Dead
 	}
@@ -63,15 +76,18 @@ func (c *Client) Chat(ctx context.Context, system, query string, history []Messa
 	}
 	resp, err := httpc.Do(req)
 	if err != nil {
+		log.Printf("zen: transport error: %v", err)
 		return busyOrDead(err.Error())
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == 429 {
-		ra := resp.Header.Get("retry-after")
+		ra := strings.TrimSpace(resp.Header.Get("retry-after"))
 		if ra == "" {
 			ra = "unknown — stand by"
+		} else if _, err := strconv.Atoi(ra); err == nil {
+			ra += "s"
 		}
-		return fmt.Sprintf(Busy, ra+"s")
+		return fmt.Sprintf(Busy, ra)
 	}
 	var data struct {
 		Type       string `json:"type"`
@@ -85,13 +101,12 @@ func (c *Client) Chat(ctx context.Context, system, query string, history []Messa
 		} `json:"output"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		log.Printf("zen: decode error: %v", err)
 		return Dead
 	}
 	if data.Type == "error" {
+		log.Printf("zen: backend error status=%d", resp.StatusCode)
 		return Dead
-	}
-	if data.OutputText != "" {
-		return data.OutputText
 	}
 	for _, item := range data.Output {
 		if item.Type != "message" {
@@ -103,12 +118,24 @@ func (c *Client) Chat(ctx context.Context, system, query string, history []Messa
 			}
 		}
 	}
+	if data.OutputText != "" {
+		return data.OutputText
+	}
 	return Dead
 }
 
+var numRe = regexp.MustCompile(`^[0-9]+$`)
+
+// busyOrDead maps transport failures: 429/rate-limit mentions route to the
+// busy reply (with ETA when a number is present), everything else is Dead.
 func busyOrDead(s string) string {
-	if m := retryRe.FindStringSubmatch(s); m != nil {
-		return fmt.Sprintf(Busy, m[1]+"s")
+	low := strings.ToLower(s)
+	if strings.Contains(low, "429") || strings.Contains(low, "rate") ||
+		strings.Contains(low, "too many requests") {
+		if m := retryRe.FindStringSubmatch(s); m != nil && numRe.MatchString(m[1]) {
+			return fmt.Sprintf(Busy, m[1]+"s")
+		}
+		return fmt.Sprintf(Busy, "unknown — stand by")
 	}
 	return Dead
 }
