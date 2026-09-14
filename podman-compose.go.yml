@@ -1,7 +1,18 @@
 # Go port compose. Shares the rouge-mongo-data volume with the Python stack.
-# CUTOVER ONLY: stop the Python stack first (both bots reply to the same
-# channels). podman-compose -f podman-compose.yml stop bot watcher, then:
-#   podman-compose -f podman-compose.go.yml up -d
+#
+# CUTOVER ORDER (both bots reply to the same channels — never run together):
+#   1. podman-compose -f podman-compose.yml stop bot watcher
+#   2. podman-compose -f podman-compose.go.yml up -d
+# GREEN-FIELD: the mongo volume does not exist yet; the mongo service below
+# creates it empty on first up — then seed it once:
+#   podman run --rm --network=host -v $PWD/skills:/app/skills \
+#     -e MONGO_URI=mongodb://127.0.0.1:27017/rouge \
+#     localhost/rouge-automaton-go:latest /ingest
+#   (wiki enrichment still comes from the Python crawler scripts.)
+# NAME CONFLICT: container_name/volume names below intentionally match the
+# Python compose file so cutover reuses the same volume and ports.
+# WATCHER: no Go RSS watcher exists yet (python-rewrite's scripts/rss_watch.py
+# has no port) — wiki freshness still depends on the Python watcher image.
 services:
   bot-go:
     build:
