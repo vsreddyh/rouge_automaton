@@ -1,0 +1,32 @@
+# Go port compose. Shares the rouge-mongo-data volume with the Python stack.
+# CUTOVER ONLY: stop the Python stack first (both bots reply to the same
+# channels). podman-compose -f podman-compose.yml stop bot watcher, then:
+#   podman-compose -f podman-compose.go.yml up -d
+services:
+  bot-go:
+    build:
+      context: .
+      dockerfile: ContainerfileGo
+    image: localhost/rouge-automaton-go:latest
+    container_name: rouge-automaton-go
+    network_mode: host
+    env_file: .env
+    environment:
+      MONGO_URI: mongodb://127.0.0.1:27017/rouge
+      SKILLS_DIR: /app/skills
+    restart: unless-stopped
+    depends_on:
+      - mongo
+  mongo:
+    image: docker.io/library/mongo:7-jammy
+    container_name: rouge-mongo-compose
+    ports:
+      - "127.0.0.1:27017:27017"
+    volumes:
+      - mongo-data:/data/db
+    restart: unless-stopped
+
+volumes:
+  mongo-data:
+    external: true
+    name: rouge-mongo-data
