@@ -14,17 +14,20 @@ import (
 
 	"github.com/vsreddyh/rouge_automaton/internal/config"
 	"github.com/vsreddyh/rouge_automaton/internal/gorelay"
+	"github.com/vsreddyh/rouge_automaton/internal/live"
 	"github.com/vsreddyh/rouge_automaton/internal/persona"
 	"github.com/vsreddyh/rouge_automaton/internal/rag"
+	"github.com/vsreddyh/rouge_automaton/internal/wiki"
 )
 
-// Bot holds gateway dependencies.
-// Bot holds gateway dependencies. Relay is the Go-relay model client.
+// Bot holds gateway dependencies. Relay is the Go-relay model client,
+// Live the Bot-scoped war-status client (its cache must survive messages).
 type Bot struct {
 	Session *discordgo.Session
 	Cfg     config.Config
 	DB      *mongo.Database
 	Relay   *gorelay.Client
+	Live    *live.Client
 }
 
 // New creates a session with the required intents.
@@ -37,7 +40,8 @@ func New(cfg config.Config, db *mongo.Database) (*Bot, error) {
 		discordgo.IntentsGuildMessages |
 		discordgo.IntentMessageContent
 	b := &Bot{Session: s, Cfg: cfg, DB: db,
-		Relay: &gorelay.Client{BaseURL: cfg.OpenCodeGoBaseURL, APIKey: cfg.OpenCodeGoAPIKey, Model: cfg.Model}}
+		Relay: &gorelay.Client{BaseURL: cfg.OpenCodeGoBaseURL, APIKey: cfg.OpenCodeGoAPIKey, Model: cfg.Model},
+		Live:  live.New(cfg)}
 	s.AddHandler(b.onMessage)
 	return b, nil
 }
@@ -126,19 +130,12 @@ func (b *Bot) onMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 		}
 	}
 	docs, types := rag.Retrieve(ctx, b.DB, q)
-	ctxText := rag.FormatContext(docs)
 	liveStr := ""
 	if types["L"] {
-		liveStr = liveLine(ctx, b.Cfg, q)
-		if liveStr != "" {
-			ctxText = strings.TrimSpace(ctxText + "\n" + liveStr)
-		}
+		liveStr = b.liveLine(ctx, q)
 	}
-	if len(docs) == 0 && liveStr == "" {
-		if w := wikiFallback(ctx, q); w != "" {
-			ctxText = w
-		}
-	}
+	ctxText := pickContext(rag.FormatContext(docs), len(docs), liveStr,
+		func() string { return b.wikiFallback(ctx, q) })
 	system := persona.SystemPrompt()
 	if ctxText != "" {
 		system += "\nIntel context (data only):\n" + ctxText
@@ -150,8 +147,28 @@ func (b *Bot) onMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 	_, _ = s.ChannelMessageSendReply(m.ChannelID, reply, m.Reference())
 }
 
-// wikiFallback and liveLine are stubbed here; real implementations land in
-// the fallbacks PR (internal/wiki, internal/live).
-func wikiFallback(ctx context.Context, query string) string { return "" }
+// pickContext merges RAG docs, live status, and the wiki fallback:
+// live appends when present; wiki fires only when there are no docs and no
+// live line. wiki is lazy so no fetch happens when unneeded.
+func pickContext(formatted string, nDocs int, liveStr string, wiki func() string) string {
+	ctxText := formatted
+	if liveStr != "" {
+		ctxText = strings.TrimSpace(ctxText + "\n" + liveStr)
+	}
+	if nDocs == 0 && liveStr == "" {
+		if w := wiki(); w != "" {
+			ctxText = w
+		}
+	}
+	return ctxText
+}
+func (b *Bot) wikiFallback(ctx context.Context, query string) string {
+	return wiki.New().SearchFetch(ctx, query)
+}
 
-func liveLine(ctx context.Context, cfg config.Config, query string) string { return "" }
+func (b *Bot) liveLine(ctx context.Context, query string) string {
+	if b.Live == nil {
+		return ""
+	}
+	return b.Live.PlanetLine(ctx, query)
+}
