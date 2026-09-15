@@ -8,11 +8,11 @@
 #   podman run --rm --network=host -v $PWD/skills:/app/skills \
 #     -e MONGO_URI=mongodb://127.0.0.1:27017/rouge \
 #     localhost/rouge-automaton-go:latest /ingest
-#   (wiki enrichment still comes from the Python crawler scripts.)
-# NAME CONFLICT: container_name/volume names below intentionally match the
-# Python compose file so cutover reuses the same volume and ports.
-# WATCHER: no Go RSS watcher exists yet (python-rewrite's scripts/rss_watch.py
-# has no port) — wiki freshness still depends on the Python watcher image.
+#   (wiki enrichment now runs in Go too, via the watcher service below.)
+# NAME CONFLICT: container_name/volume names below are Go-suffixed so the
+# Python stack can stay up during cutover.
+# WATCHER: the Go watcher polls the RecentChanges Atom feed and re-parses
+# changed pages; no Python dependency remains.
 services:
   bot-go:
     build:
@@ -25,6 +25,18 @@ services:
     environment:
       MONGO_URI: mongodb://127.0.0.1:27017/rouge
       SKILLS_DIR: /app/skills
+    restart: unless-stopped
+    depends_on:
+      - mongo
+  watcher-go:
+    image: localhost/rouge-automaton-go:latest
+    container_name: rouge-watcher-go
+    network_mode: host
+    entrypoint: ["/watch"]
+    command: ["--interval", "5m"]
+    env_file: .env
+    environment:
+      MONGO_URI: mongodb://127.0.0.1:27017/rouge
     restart: unless-stopped
     depends_on:
       - mongo
