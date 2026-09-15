@@ -1,8 +1,8 @@
-// Package zen talks to the OpenCode Go relay over its Responses API
+// Package gorelay talks to the OpenCode Go relay over its Responses API
 // (POST {base}/v1/responses). It is the bot's only model backend: there is
 // no fallback model, so every failure path resolves to an in-character
 // canned reply instead of a downgrade.
-package zen
+package gorelay
 
 import (
 	"bytes"
@@ -102,7 +102,7 @@ func (c *Client) Chat(ctx context.Context, system, query string, history []Messa
 	}
 	resp, err := httpc.Do(req)
 	if err != nil {
-		log.Printf("zen: transport error: %v", err)
+		log.Printf("gorelay: transport error: %v", err)
 		return busyOrDead(err.Error())
 	}
 	defer resp.Body.Close()
@@ -130,13 +130,13 @@ func (c *Client) Chat(ctx context.Context, system, query string, history []Messa
 		} `json:"output"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
-		log.Printf("zen: decode error: %v", err)
+		log.Printf("gorelay: decode error: %v", err)
 		return Dead
 	}
 	if data.Type == "error" {
 		// Provider-level error envelope (credits, model, upstream): logged
 		// with status for ops, answered with Dead — never retried here.
-		log.Printf("zen: backend error status=%d", resp.StatusCode)
+		log.Printf("gorelay: backend error status=%d", resp.StatusCode)
 		return Dead
 	}
 	// Extraction order matters: the structured output[] array wins over the
