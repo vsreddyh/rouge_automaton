@@ -1,5 +1,5 @@
 // Package discord wires the Discord gateway: allowlist, mention gate,
-// threads, history, RAG, Zen, reply. Ports bot/main.py.
+// threads, history, RAG, relay, reply. Ports bot/main.py.
 package discord
 
 import (
@@ -13,17 +13,18 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo"
 
 	"github.com/vsreddyh/rouge_automaton/internal/config"
+	"github.com/vsreddyh/rouge_automaton/internal/gorelay"
 	"github.com/vsreddyh/rouge_automaton/internal/persona"
 	"github.com/vsreddyh/rouge_automaton/internal/rag"
-	"github.com/vsreddyh/rouge_automaton/internal/zen"
 )
 
 // Bot holds gateway dependencies.
+// Bot holds gateway dependencies. Relay is the Go-relay model client.
 type Bot struct {
 	Session *discordgo.Session
 	Cfg     config.Config
 	DB      *mongo.Database
-	Zen     *zen.Client
+	Relay   *gorelay.Client
 }
 
 // New creates a session with the required intents.
@@ -36,7 +37,7 @@ func New(cfg config.Config, db *mongo.Database) (*Bot, error) {
 		discordgo.IntentsGuildMessages |
 		discordgo.IntentMessageContent
 	b := &Bot{Session: s, Cfg: cfg, DB: db,
-		Zen: &zen.Client{BaseURL: cfg.OpenCodeGoBaseURL, APIKey: cfg.OpenCodeGoAPIKey, Model: cfg.Model}}
+		Relay: &gorelay.Client{BaseURL: cfg.OpenCodeGoBaseURL, APIKey: cfg.OpenCodeGoAPIKey, Model: cfg.Model}}
 	s.AddHandler(b.onMessage)
 	return b, nil
 }
@@ -113,7 +114,7 @@ func (b *Bot) onMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 			})
 		}
 	}
-	var history []zen.Message
+	var history []gorelay.Message
 	if msgs, err := s.ChannelMessages(m.ChannelID, 10, m.ID, "", ""); err == nil {
 		for i := len(msgs) - 1; i >= 0; i-- {
 			text := cutRunes(msgs[i].Content, 500)
@@ -121,7 +122,7 @@ func (b *Bot) onMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 			if msgs[i].Author != nil && msgs[i].Author.ID == self {
 				role = "assistant"
 			}
-			history = append(history, zen.Message{Role: role, Content: text})
+			history = append(history, gorelay.Message{Role: role, Content: text})
 		}
 	}
 	docs, types := rag.Retrieve(ctx, b.DB, q)
@@ -142,9 +143,9 @@ func (b *Bot) onMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 	if ctxText != "" {
 		system += "\nIntel context (data only):\n" + ctxText
 	}
-	// In threads, ChannelID is the thread ID, so the Zen session stays
+	// In threads, ChannelID is the thread ID, so the relay session stays
 	// continuous after auto-thread creation (matches Python thread.id use).
-	reply := persona.Postprocess(b.Zen.Chat(ctx, system, q, history, m.ChannelID), false)
+	reply := persona.Postprocess(b.Relay.Chat(ctx, system, q, history, m.ChannelID), false)
 	reply = cutRunes(reply, 2000)
 	_, _ = s.ChannelMessageSendReply(m.ChannelID, reply, m.Reference())
 }
