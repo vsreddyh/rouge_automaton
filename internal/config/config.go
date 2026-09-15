@@ -51,6 +51,8 @@ func getenv(key, def string) string {
 
 // strSet parses a comma-separated env list into a membership set, dropping
 // blanks and surrounding whitespace so "1, 2" and "1,2" behave the same.
+// Used for DISCORD_ALLOWED_USERS (several IDs) and
+// DISCORD_FREE_RESPONSE_CHANNELS (usually one ID, but the shape is a list).
 func strSet(csv string) map[string]bool {
 	out := map[string]bool{}
 	for _, s := range strings.Split(csv, ",") {
