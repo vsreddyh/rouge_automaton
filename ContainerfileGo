@@ -11,11 +11,14 @@ COPY souldata.go ./
 COPY skills ./skills
 RUN CGO_ENABLED=0 go build -o /rouge ./cmd/rouge && \
     CGO_ENABLED=0 go build -o /ingest ./cmd/ingest && \
-    CGO_ENABLED=0 go build -o /watch ./cmd/watch
+    CGO_ENABLED=0 go build -o /watch ./cmd/watch && \
+    CGO_ENABLED=0 go build -o /mcpdb ./cmd/mcpdb
 
 FROM gcr.io/distroless/static-debian12:nonroot
 # Root-owned 0644 files are readable by nonroot; /app is created by COPY.
-COPY --from=build /rouge /ingest /watch /
+# /mcpdb is the MCP server (stdio); run it explicitly, e.g.
+# podman run -i --network=host -e MONGO_URI=... <image> /mcpdb
+COPY --from=build /rouge /ingest /watch /mcpdb /
 COPY skills/ /app/skills/
 WORKDIR /app
 ENTRYPOINT ["/rouge"]

@@ -36,6 +36,12 @@ type Executor struct {
 	Wiki *wiki.Client
 }
 
+// ToolBackend is the seam the MCP server (and tests) program against:
+// anything that can execute a named tool call with a JSON argument object.
+type ToolBackend interface {
+	Execute(ctx context.Context, name, argsJSON string) string
+}
+
 // NewExecutor wires an executor from a database handle and the bot config
 // (which carries the war-API credentials).
 func NewExecutor(db *mongo.Database, cfg config.Config) *Executor {
