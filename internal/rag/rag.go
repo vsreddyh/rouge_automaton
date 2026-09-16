@@ -1,11 +1,8 @@
-// Package rag implements Type-U/G/W/L routing and Mongo retrieval.
-//
-// The store holds one collection per content kind (units, weapons, biomes,
-// planets, ...). Retrieval never scans everything at once: the query is
-// routed to the collections that can answer it, candidates are ranked in
-// Go by keyword overlap with a name/alias bonus, and only the top few docs
-// are injected into the prompt. There is intentionally no vector index —
-// at ~900 docs the keyword scorer is cheaper, deterministic, and testable.
+// Package rag is the Mongo retrieval layer: keyword-first ranking with a
+// name/alias bonus, no vectors, and — deliberately — no router. There is no
+// vocabulary list anywhere in this package: the model decides what to look
+// up and calls the Search* functions with the user's own words. At ~900
+// docs the keyword scorer is cheaper, deterministic, and testable.
 package rag
 
 import (
@@ -19,28 +16,12 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 )
 
-var (
-	// autoRe matches Automaton-side vocabulary: unit names, vehicles and
-	// structures. This is a pre-filter, not a classifier — a matching query
-	// simply earns a Type-U lookup alongside any other routed types.
-	autoRe = regexp.MustCompile(`(?i)hulk|tank|devastator|strider|bot|dropship|gunship|fabricator|raider|berserker|commissar|trooper`)
-	// termRe matches Terminid-side vocabulary (units and bug holes).
-	termRe = regexp.MustCompile(`(?i)charger|titan|bug|terminid|spewer|spitter|stalker|impaler|hunter|warrior|hole|bile`)
-	// illuRe matches Illuminate-side vocabulary.
-	illuRe = regexp.MustCompile(`(?i)squid|illuminate|harvester|overseer|voteless|watcher|warp|stingray|fleshmob`)
-	// gearRe matches loadout vocabulary: stratagems, weapon classes and
-	// attachment-adjacent terms. Triggers a Type-G lookup.
-	gearRe = regexp.MustCompile(`(?i)stratagem|weapon|loadout|amr|railgun|eagle|orbital|sentry|armor|booster|warbond|primary|secondary|throwable|rifle|shotgun|pistol|smg|support weapon|grenade`)
-	// worldRe matches planet/biome/mission vocabulary, including concrete
-	// biome names so "tundra conditions" routes to Type-W without the word
-	// "biome" being present.
-	worldRe = regexp.MustCompile(`(?i)planet|biome|mission|difficulty|storm|fog|blizzard|where|liberat|sector|weather|hazard|tundra|desert|swamp|forest|jungle|arctic|oasis|moor|metropolis|colony|conditions|glacier|dunes`)
-	// liveRe matches war-status vocabulary. The word-boundary on owns avoids
-	// false positives like "known". Triggers a Type-L live API lookup.
-	liveRe = regexp.MustCompile(`(?i)status|order|owner|\bowns?\b|controlled|liberation|players|divers|attack|defense|campaign|who holds|right now`)
-	// wordRe tokenizes queries for keyword extraction.
-	wordRe = regexp.MustCompile(`\w+`)
-)
+// wordRe tokenizes queries for keyword extraction.
+var wordRe = regexp.MustCompile(`\w+`)
+
+// Factions is the closed set of valid faction filters. The model supplies
+// these, so anything outside the set is rejected rather than guessed.
+var Factions = map[string]bool{"automatons": true, "terminids": true, "illuminate": true}
 
 // Stop is the noise-word set stripped before scoring — the same list as the
 // Python port. Without it, queries like "how to kill hulk" let "how/to"
@@ -54,45 +35,6 @@ var Stop = map[string]bool{
 	"on": true, "in": true, "of": true, "a": true, "an": true,
 	"is": true, "it": true, "to": true, "be": true, "by": true,
 	"or": true, "do": true, "i": true, "as": true, "at": true,
-}
-
-// Route maps a query to the retrieval types that can answer it: U (units),
-// G (gear), W (world), L (live). A query may match several ("loadout for
-// Mintoria difficulty 6" is G+W); a query matching nothing falls back to U,
-// the most likely intent for this bot.
-func Route(query string) map[string]bool {
-	types := map[string]bool{}
-	if autoRe.MatchString(query) || termRe.MatchString(query) || illuRe.MatchString(query) {
-		types["U"] = true
-	}
-	if gearRe.MatchString(query) {
-		types["G"] = true
-	}
-	if worldRe.MatchString(query) {
-		types["W"] = true
-	}
-	if liveRe.MatchString(query) {
-		types["L"] = true
-	}
-	if len(types) == 0 {
-		types["U"] = true
-	}
-	return types
-}
-
-// FactionOf narrows a Type-U lookup to one faction collection slice, so a
-// Hulk question never sees Terminid docs. Illuminate is checked first
-// because its vocabulary is the most distinctive; "" means no filter.
-func FactionOf(query string) string {
-	switch {
-	case illuRe.MatchString(query):
-		return "illuminate"
-	case termRe.MatchString(query):
-		return "terminids"
-	case autoRe.MatchString(query):
-		return "automatons"
-	}
-	return ""
 }
 
 // Keywords extracts the significant lowercase terms of a query, each once.
@@ -196,14 +138,15 @@ func findAll(ctx context.Context, db *mongo.Database, coll string, filter bson.M
 	return docs
 }
 
-// SearchUnits serves Type-U: the faction slice of units plus same-faction
-// structures (bug holes, fabricators), ranked together and cut to k.
-// Structures share the query vocabulary, so closing a bug hole ranks
-// alongside killing the bugs that use it.
-func SearchUnits(ctx context.Context, db *mongo.Database, query string, k int) []bson.M {
+// SearchUnits searches units plus same-faction structures (bug holes,
+// fabricators), ranked together and cut to k. Faction is supplied by the
+// caller (the model), validated against Factions; anything else means no
+// filter rather than a wrong one. Structures share the query vocabulary,
+// so closing a bug hole ranks alongside killing the bugs that use it.
+func SearchUnits(ctx context.Context, db *mongo.Database, query, faction string, k int) []bson.M {
 	filter := bson.M{}
-	if f := FactionOf(query); f != "" {
-		filter["faction"] = f
+	if Factions[strings.ToLower(faction)] {
+		filter["faction"] = strings.ToLower(faction)
 	}
 	docs := findAll(ctx, db, "units", filter, 100)
 	docs = append(docs, findAll(ctx, db, "structures", filter, 40)...)
@@ -214,8 +157,8 @@ func SearchUnits(ctx context.Context, db *mongo.Database, query string, k int) [
 	return docs
 }
 
-// SearchGear serves Type-G: stratagems, weapons, armor and boosters pooled
-// and ranked together, cut to k. No faction filter applies — gear is
+// SearchGear searches stratagems, weapons, armor and boosters pooled and
+// ranked together, cut to k. No faction filter applies — gear is
 // faction-agnostic, and the counters inside unit docs already name the
 // right tools.
 func SearchGear(ctx context.Context, db *mongo.Database, query string, k int) []bson.M {
@@ -230,10 +173,10 @@ func SearchGear(ctx context.Context, db *mongo.Database, query string, k int) []
 	return docs
 }
 
-// SearchWorld serves Type-W in three passes: ranked biomes (the whole set
-// is only ~31 docs), planets matched exactly on name/sector keywords, then
-// missions/difficulty/effects ranked and capped at 2 — the Python parity
-// cap that keeps world answers from drowning in modifier docs.
+// SearchWorld searches biomes, planets, missions, difficulty and effects
+// in three passes: ranked biomes (the whole set is only ~31 docs), planets
+// matched exactly on name/sector keywords, then missions/difficulty/effects
+// ranked and capped at 2 so world answers don't drown in modifier docs.
 func SearchWorld(ctx context.Context, db *mongo.Database, query string, k int) []bson.M {
 	words := Keywords(query)
 	biomes := findAll(ctx, db, "biomes", bson.M{}, 31)
@@ -275,29 +218,6 @@ func SearchWorld(ctx context.Context, db *mongo.Database, query string, k int) [
 		out = out[:k+4]
 	}
 	return out
-}
-
-// Retrieve fans out across every routed type (3 unit + 2 gear + 2 world
-// docs typical) and caps the merged set at 5, holding the prompt budget
-// near ~2500 input tokens regardless of how many types matched.
-func Retrieve(ctx context.Context, db *mongo.Database, query string) ([]bson.M, map[string]bool) {
-	// TODO: L-only queries return no docs (same gap as the Python port); the
-	// caller serves those from the live status API instead.
-	types := Route(query)
-	var docs []bson.M
-	if types["U"] {
-		docs = append(docs, SearchUnits(ctx, db, query, 3)...)
-	}
-	if types["G"] {
-		docs = append(docs, SearchGear(ctx, db, query, 2)...)
-	}
-	if types["W"] {
-		docs = append(docs, SearchWorld(ctx, db, query, 2)...)
-	}
-	if len(docs) > 5 {
-		docs = docs[:5]
-	}
-	return docs, types
 }
 
 // FormatContext renders retrieved docs as cited context lines for the
