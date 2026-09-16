@@ -90,13 +90,13 @@ func docName(m bson.M) string {
 // quality comes from Score, and anything beyond the caps would be cut
 // from the prompt anyway.
 const (
-	fetchUnits      = 100 // units scanned per Type-U lookup
-	fetchStructures = 40  // structures scanned per Type-U lookup
-	fetchGearColl   = 150 // per-collection scan for gear lookups
-	fetchPlanets    = 280 // planets scanned per world lookup (whole set)
-	fetchWorldExtra = 120 // per-collection scan for missions/difficulty/effects
-	maxWorldExtra   = 2   // missions/difficulty/effects docs injected max
-	maxPlanetHits   = 2   // planet name/sector matches injected max
+	fetchUnits      = 100                           // units scanned per Type-U lookup
+	fetchStructures = 40                            // structures scanned per Type-U lookup
+	fetchGearColl   = 150                           // per-collection scan for gear lookups
+	fetchPlanets    = 280                           // planets scanned per world lookup (whole set)
+	fetchWorldExtra = 120                           // per-collection scan for missions/difficulty/effects
+	maxWorldExtra   = 2                             // missions/difficulty/effects docs injected max
+	maxPlanetHits   = 2                             // planet name/sector matches injected max
 	maxWorldDocs    = maxPlanetHits + maxWorldExtra // world-question ceiling
 )
 
