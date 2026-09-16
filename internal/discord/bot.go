@@ -1,5 +1,5 @@
 // Package discord wires the Discord gateway: allowlist, mention gate,
-// threads, history, RAG, relay, reply. Ports bot/main.py.
+// threads, history, model tool loop, reply.
 package discord
 
 import (
@@ -14,17 +14,18 @@ import (
 
 	"github.com/vsreddyh/rouge_automaton/internal/config"
 	"github.com/vsreddyh/rouge_automaton/internal/gorelay"
+	"github.com/vsreddyh/rouge_automaton/internal/mcpdb"
 	"github.com/vsreddyh/rouge_automaton/internal/persona"
-	"github.com/vsreddyh/rouge_automaton/internal/rag"
 )
 
-// Bot holds gateway dependencies.
-// Bot holds gateway dependencies. Relay is the Go-relay model client.
+// Bot holds gateway dependencies: the model client (Relay) and the tool
+// executor (Tools) it reasons with. There is no query router — the model
+// decides what to look up by calling tools.
 type Bot struct {
 	Session *discordgo.Session
 	Cfg     config.Config
-	DB      *mongo.Database
 	Relay   *gorelay.Client
+	Tools   *mcpdb.Executor
 }
 
 // New creates a session with the required intents.
@@ -36,8 +37,9 @@ func New(cfg config.Config, db *mongo.Database) (*Bot, error) {
 	s.Identify.Intents = discordgo.IntentsGuilds |
 		discordgo.IntentsGuildMessages |
 		discordgo.IntentMessageContent
-	b := &Bot{Session: s, Cfg: cfg, DB: db,
-		Relay: &gorelay.Client{BaseURL: cfg.OpenCodeGoBaseURL, APIKey: cfg.OpenCodeGoAPIKey, Model: cfg.Model}}
+	b := &Bot{Session: s, Cfg: cfg,
+		Relay: &gorelay.Client{BaseURL: cfg.OpenCodeGoBaseURL, APIKey: cfg.OpenCodeGoAPIKey, Model: cfg.Model},
+		Tools: mcpdb.NewExecutor(db, cfg)}
 	s.AddHandler(b.onMessage)
 	return b, nil
 }
@@ -125,33 +127,13 @@ func (b *Bot) onMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 			history = append(history, gorelay.Message{Role: role, Content: text})
 		}
 	}
-	docs, types := rag.Retrieve(ctx, b.DB, q)
-	ctxText := rag.FormatContext(docs)
-	liveStr := ""
-	if types["L"] {
-		liveStr = liveLine(ctx, b.Cfg, q)
-		if liveStr != "" {
-			ctxText = strings.TrimSpace(ctxText + "\n" + liveStr)
-		}
-	}
-	if len(docs) == 0 && liveStr == "" {
-		if w := wikiFallback(ctx, q); w != "" {
-			ctxText = w
-		}
-	}
-	system := persona.SystemPrompt()
-	if ctxText != "" {
-		system += "\nIntel context (data only):\n" + ctxText
-	}
+	// No router and no pre-fetched context: the system prompt carries the
+	// persona plus tool procedure, and the model pulls whatever intel it
+	// needs through the think-act loop below.
+	system := persona.SystemPrompt() + mcpdb.ToolGuidance
 	// In threads, ChannelID is the thread ID, so the relay session stays
-	// continuous after auto-thread creation (matches Python thread.id use).
-	reply := persona.Postprocess(b.Relay.Chat(ctx, system, q, history, m.ChannelID), false)
+	// continuous after auto-thread creation.
+	reply := persona.Postprocess(b.Relay.ChatWithTools(ctx, system, q, history, m.ChannelID, mcpdb.ToolDefs(), b.Tools.Execute), false)
 	reply = cutRunes(reply, 2000)
 	_, _ = s.ChannelMessageSendReply(m.ChannelID, reply, m.Reference())
 }
-
-// wikiFallback and liveLine are stubbed here; real implementations land in
-// the fallbacks PR (internal/wiki, internal/live).
-func wikiFallback(ctx context.Context, query string) string { return "" }
-
-func liveLine(ctx context.Context, cfg config.Config, query string) string { return "" }
