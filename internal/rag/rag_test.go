@@ -6,27 +6,18 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
-func TestRoute(t *testing.T) {
-	if got := Route("how to kill hulk"); !got["U"] || len(got) != 1 {
-		t.Fatalf("hulk route = %v", got)
+// The router is gone by design (the model decides what to look up), so the
+// tests pin the two remaining contracts: the faction allowlist and ranking.
+func TestFactions(t *testing.T) {
+	for _, f := range []string{"automatons", "terminids", "illuminate"} {
+		if !Factions[f] {
+			t.Fatalf("%q must be a valid faction", f)
+		}
 	}
-	if got := Route("best primary vs terminids"); !got["U"] || !got["G"] {
-		t.Fatalf("primary route = %v", got)
-	}
-	if got := Route("who owns cyberstan right now"); !got["L"] {
-		t.Fatalf("live route = %v", got)
-	}
-	if got := Route("tundra conditions"); !got["W"] {
-		t.Fatalf("world route = %v", got)
-	}
-}
-
-func TestFaction(t *testing.T) {
-	if FactionOf("harvester shield") != "illuminate" {
-		t.Fatal("harvester must map to illuminate")
-	}
-	if FactionOf("orbital strike") != "" {
-		t.Fatal("gear query must have no faction")
+	for _, f := range []string{"bots", "squids", ""} {
+		if Factions[f] {
+			t.Fatalf("%q must not be a valid faction", f)
+		}
 	}
 }
 
