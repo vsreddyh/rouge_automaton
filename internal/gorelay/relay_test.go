@@ -3,6 +3,7 @@ package gorelay
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -99,5 +100,65 @@ func TestBusyGate(t *testing.T) {
 	}
 	if got := busyOrDead("rate limited, retry after 12"); !strings.Contains(got, "12s") {
 		t.Fatalf("rate+number must carry ETA: %q", got)
+	}
+}
+
+func TestChatWithTools(t *testing.T) {
+	var bodies []string
+	round := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var v struct {
+			Input []any `json:"input"`
+			Tools []any `json:"tools"`
+		}
+		raw, _ := io.ReadAll(r.Body)
+		bodies = append(bodies, string(raw))
+		json.Unmarshal(raw, &v)
+		if len(v.Tools) == 0 {
+			t.Error("tools must be sent every round")
+		}
+		round++
+		if round == 1 {
+			w.Write([]byte(`{"output":[{"type":"function_call","call_id":"call_1","name":"search_units","arguments":"{\"query\":\"hulk\"}"}]}`))
+			return
+		}
+		// Round 2 must echo the call and carry its output.
+		joined := string(raw)
+		if !strings.Contains(joined, "call_1") || !strings.Contains(joined, "Back vent") {
+			t.Errorf("round 2 must echo call + output, got %s", joined[:200])
+		}
+		w.Write([]byte(`{"output":[{"type":"message","content":[{"type":"output_text","text":"Hulk. Rear vent. Over."}]}]}`))
+	}))
+	defer srv.Close()
+	c := &Client{BaseURL: srv.URL, HTTP: srv.Client()}
+	execCalls := 0
+	got := c.ChatWithTools(context.Background(), "", "kill hulk?", nil, "s",
+		[]ToolDef{{Name: "search_units"}},
+		func(ctx context.Context, name, args string) string {
+			execCalls++
+			if name != "search_units" || !strings.Contains(args, "hulk") {
+				t.Errorf("exec got %q %q", name, args)
+			}
+			return "Hulk Bruiser: weak Back vent"
+		})
+	if got != "Hulk. Rear vent. Over." {
+		t.Fatalf("got %q", got)
+	}
+	if execCalls != 1 || len(bodies) != 2 {
+		t.Fatalf("exec=%d rounds=%d", execCalls, len(bodies))
+	}
+}
+
+func TestChatWithToolsNoCall(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"output":[{"type":"message","content":[{"type":"output_text","text":"Hi. Over."}]}]}`))
+	}))
+	defer srv.Close()
+	c := &Client{BaseURL: srv.URL, HTTP: srv.Client()}
+	called := false
+	got := c.ChatWithTools(context.Background(), "", "hi", nil, "s", nil,
+		func(ctx context.Context, name, args string) string { called = true; return "" })
+	if got != "Hi. Over." || called {
+		t.Fatalf("passthrough failed: %q called=%v", got, called)
 	}
 }

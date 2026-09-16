@@ -38,6 +38,32 @@ type Message struct {
 	Content string `json:"content"`
 }
 
+// ToolDef describes one function tool offered to the model. Parameters is a
+// JSON Schema object (e.g. {"type":"object","properties":{...}}).
+type ToolDef struct {
+	Name        string
+	Description string
+	Parameters  map[string]any
+}
+
+// outputPart is one content part inside a message item.
+type outputPart struct {
+	Type string
+	Text string
+}
+
+// outputItem is one entry of a response's output array that the client acts
+// on. Raw preserves function_call items verbatim so follow-up requests can
+// echo them back (the API requires the exact object alongside outputs).
+type outputItem struct {
+	Type      string
+	CallID    string `json:"call_id"`
+	Name      string
+	Arguments string
+	Content   []outputPart
+	Raw       json.RawMessage
+}
+
 // Client calls the relay. HTTP may be overridden in tests; otherwise the
 // process default client is used.
 type Client struct {
@@ -82,12 +108,30 @@ func (c *Client) Chat(ctx context.Context, system, query string, history []Messa
 		"max_output_tokens": 1024, "temperature": 0.6,
 		"reasoning": map[string]any{"effort": "low"},
 	})
+	text := c.doRound(ctx, url, session, body)
+	return text.reply
+}
+
+// roundResult is one decoded Responses-API round: either a canned reply
+// (ok=false) or actionable output items (ok=true).
+type roundResult struct {
+	reply string
+	ok    bool
+	items []outputItem
+}
+
+// doRound POSTs one request body and decodes the response. Transport,
+// status and envelope failures resolve to Busy/Dead with ok=false; a
+// decodable response with message text resolves to it with ok=false; a
+// response carrying only non-message items (e.g. function calls) resolves
+// with ok=true so the caller can act on them.
+func (c *Client) doRound(ctx context.Context, url, session string, body []byte) roundResult {
 	// 60s wall clock per the terse reply budget; the caller adds its own.
 	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
 	if err != nil {
-		return Dead
+		return roundResult{reply: Dead}
 	}
 	// The custom UA and session header are Go-relay requirements, not
 	// decoration: generic SDK user agents and missing sessions are rejected
@@ -103,7 +147,7 @@ func (c *Client) Chat(ctx context.Context, system, query string, history []Messa
 	resp, err := httpc.Do(req)
 	if err != nil {
 		log.Printf("gorelay: transport error: %v", err)
-		return busyOrDead(err.Error())
+		return roundResult{reply: busyOrDead(err.Error())}
 	}
 	defer resp.Body.Close()
 	// 429 is the only status with its own reply: Retry-After becomes the
@@ -116,46 +160,130 @@ func (c *Client) Chat(ctx context.Context, system, query string, history []Messa
 		} else if _, err := strconv.Atoi(ra); err == nil {
 			ra += "s"
 		}
-		return fmt.Sprintf(Busy, ra)
+		return roundResult{reply: fmt.Sprintf(Busy, ra)}
 	}
-	var data struct {
-		Type       string `json:"type"`
-		OutputText string `json:"output_text"`
-		Output     []struct {
-			Type    string `json:"type"`
-			Content []struct {
-				Type string `json:"type"`
-				Text string `json:"text"`
-			} `json:"content"`
-		} `json:"output"`
+	// Decode items twice: typed for dispatch, raw for verbatim echo of
+	// function_call objects in follow-up requests.
+	var raw struct {
+		Type       string            `json:"type"`
+		OutputText string            `json:"output_text"`
+		Output     []json.RawMessage `json:"output"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
 		log.Printf("gorelay: decode error: %v", err)
-		return Dead
+		return roundResult{reply: Dead}
 	}
-	if data.Type == "error" {
+	if raw.Type == "error" {
 		// Provider-level error envelope (credits, model, upstream): logged
 		// with status for ops, answered with Dead — never retried here.
 		log.Printf("gorelay: backend error status=%d", resp.StatusCode)
-		return Dead
+		return roundResult{reply: Dead}
+	}
+	var items []outputItem
+	for _, r := range raw.Output {
+		var item outputItem
+		if err := json.Unmarshal(r, &item); err != nil {
+			continue
+		}
+		item.Raw = r
+		items = append(items, item)
 	}
 	// Extraction order matters: the structured output[] array wins over the
 	// top-level output_text convenience field when both are present.
-	for _, item := range data.Output {
+	for _, item := range items {
 		if item.Type != "message" {
 			continue
 		}
 		for _, part := range item.Content {
 			if part.Type == "output_text" && part.Text != "" {
-				return part.Text
+				return roundResult{reply: part.Text}
 			}
 		}
 	}
-	if data.OutputText != "" {
-		return data.OutputText
+	if raw.OutputText != "" {
+		return roundResult{reply: raw.OutputText}
+	}
+	if len(items) > 0 {
+		return roundResult{ok: true, items: items}
 	}
 	// Well-formed but content-free response: Dead, not an empty Discord post.
+	return roundResult{reply: Dead}
+}
+
+// maxToolRounds caps the think-act loop so one Discord message can never
+// turn into an unbounded relay session.
+const maxToolRounds = 3
+
+// ChatWithTools runs the think-act loop: the model may call the offered
+// tools (each executed by exec, which returns plain-text results) before
+// answering. The first message text ends the loop. Tool results that are
+// errors stay inside the loop as tool outputs; relay failures resolve to
+// the same canned replies as Chat.
+func (c *Client) ChatWithTools(ctx context.Context, system, query string, history []Message, session string, tools []ToolDef, exec func(ctx context.Context, name, args string) string) string {
+	// Same sliding window as Chat, but as []any so raw function_call items
+	// and outputs can be appended verbatim in later rounds.
+	var input []any
+	for _, m := range history {
+		if strings.TrimSpace(m.Content) == "" {
+			continue
+		}
+		input = append(input, m)
+		if len(input) >= 10 {
+			input = input[len(input)-10:]
+		}
+	}
+	input = append(input, Message{Role: "user", Content: query})
+	if strings.TrimSpace(session) == "" {
+		session = "rouge-main"
+	}
+	url := strings.TrimSuffix(c.BaseURL, "/") + "/v1/responses"
+	var specs []any
+	for _, t := range tools {
+		specs = append(specs, map[string]any{
+			"type": "function", "name": t.Name,
+			"description": t.Description, "parameters": t.Parameters,
+		})
+	}
+	for round := 0; round < maxToolRounds; round++ {
+		body, _ := json.Marshal(map[string]any{
+			"model": c.Model, "instructions": system, "input": input,
+			"tools":             specs,
+			"max_output_tokens": 1024, "temperature": 0.6,
+			"reasoning": map[string]any{"effort": "low"},
+		})
+		res := c.doRound(ctx, url, session, body)
+		if !res.ok {
+			return res.reply
+		}
+		var calls []outputItem
+		for _, item := range res.items {
+			if item.Type == "function_call" {
+				calls = append(calls, item)
+			}
+		}
+		if len(calls) == 0 {
+			// No text either (doRound would have returned it): stop
+			// rather than spin on content-free rounds.
+			return Dead
+		}
+		for _, call := range calls {
+			log.Printf("gorelay: tool %s(%s)", call.Name, trunc(call.Arguments, 120))
+			out := exec(ctx, call.Name, call.Arguments)
+			input = append(input, json.RawMessage(call.Raw))
+			input = append(input, map[string]any{
+				"type":    "function_call_output",
+				"call_id": call.CallID, "output": out,
+			})
+		}
+	}
 	return Dead
+}
+
+func trunc(s string, n int) string {
+	if r := []rune(s); len(r) > n {
+		return string(r[:n])
+	}
+	return s
 }
 
 // numRe guards ETA extraction to pure numbers.
