@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"regexp"
@@ -103,6 +104,8 @@ func (c *Client) Chat(ctx context.Context, system, query string, history []Messa
 	// TrimSuffix avoids a doubled slash (//v1/responses 404s) when the base
 	// URL is configured with a trailing slash.
 	url := strings.TrimSuffix(c.BaseURL, "/") + "/v1/responses"
+	// Marshal is infallible for this map shape (strings, numbers, slices —
+	// no channels or funcs), so the error is dropped by construction.
 	body, _ := json.Marshal(map[string]any{
 		"model": c.Model, "instructions": system, "input": input,
 		"max_output_tokens": 1024, "temperature": 0.6,
@@ -110,6 +113,15 @@ func (c *Client) Chat(ctx context.Context, system, query string, history []Messa
 	})
 	text := c.doRound(ctx, url, session, body)
 	return text.reply
+}
+
+// maxResponseBytes caps relay response decoding at 1MB. Relay replies are
+// small (a few KB); without a cap a misbehaving upstream could exhaust
+// memory via the streaming decoder.
+const maxResponseBytes = 1 << 20
+
+func decodeResponse(resp *http.Response, v any) error {
+	return json.NewDecoder(io.LimitReader(resp.Body, maxResponseBytes)).Decode(v)
 }
 
 // roundResult is one decoded Responses-API round: either a canned reply
@@ -169,7 +181,7 @@ func (c *Client) doRound(ctx context.Context, url, session string, body []byte) 
 		OutputText string            `json:"output_text"`
 		Output     []json.RawMessage `json:"output"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
+	if err := decodeResponse(resp, &raw); err != nil {
 		log.Printf("gorelay: decode error: %v", err)
 		return roundResult{reply: Dead}
 	}
@@ -245,6 +257,7 @@ func (c *Client) ChatWithTools(ctx context.Context, system, query string, histor
 		})
 	}
 	for round := 0; round < maxToolRounds; round++ {
+		// Same infallible-shape guarantee as Chat: no error to handle.
 		body, _ := json.Marshal(map[string]any{
 			"model": c.Model, "instructions": system, "input": input,
 			"tools":             specs,
