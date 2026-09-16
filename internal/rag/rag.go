@@ -84,8 +84,28 @@ func docName(m bson.M) string {
 	return "?"
 }
 
+// Retrieval budgets: how many candidates each lookup pulls from Mongo
+// before in-Go ranking cuts them to k. Collections are small (~900 docs
+// total), so these caps bound prompt cost, not correctness — ranking
+// quality comes from Score, and anything beyond the caps would be cut
+// from the prompt anyway.
+const (
+	fetchUnits      = 100 // units scanned per Type-U lookup
+	fetchStructures = 40  // structures scanned per Type-U lookup
+	fetchGearColl   = 150 // per-collection scan for gear lookups
+	fetchPlanets    = 280 // planets scanned per world lookup (whole set)
+	fetchWorldExtra = 120 // per-collection scan for missions/difficulty/effects
+	maxWorldExtra   = 2   // missions/difficulty/effects docs injected max
+	maxPlanetHits   = 2   // planet name/sector matches injected max
+	maxWorldDocs    = maxPlanetHits + maxWorldExtra // world-question ceiling
+)
+
+// nameBonus is the score boost for an exact name/alias hit — large enough
+// to outrank any keyword-count tie, small enough to stay a float.
+const nameBonus = 10
+
 // Score ranks one candidate doc against the query: the sum of keyword
-// occurrence counts in its search blob, plus a +10 bonus when the query
+// occurrence counts in its search blob, plus the name bonus when the query
 // names the doc exactly or uses one of its aliases. The bonus is what keeps
 // "Hulk Bruiser" above keyword-rich but unrelated docs; the comma-ok read
 // on text_blob keeps docs that lack the field from panicking.
@@ -98,12 +118,13 @@ func Score(query string, words []string, d bson.M) float64 {
 		s += float64(strings.Count(blob, w))
 	}
 	ql := strings.ToLower(query)
-	if name != "" && (strings.Contains(ql, strings.ToLower(name))) {
-		s += 10
+	// No empty check: docName falls back to "?", so name is always set.
+	if strings.Contains(ql, strings.ToLower(name)) {
+		s += nameBonus
 	} else {
 		for _, a := range strList(d, "aliases") {
 			if a != "" && strings.Contains(ql, strings.ToLower(a)) {
-				s += 10
+				s += nameBonus
 				break
 			}
 		}
@@ -148,8 +169,8 @@ func SearchUnits(ctx context.Context, db *mongo.Database, query, faction string,
 	if Factions[strings.ToLower(faction)] {
 		filter["faction"] = strings.ToLower(faction)
 	}
-	docs := findAll(ctx, db, "units", filter, 100)
-	docs = append(docs, findAll(ctx, db, "structures", filter, 40)...)
+	docs := findAll(ctx, db, "units", filter, fetchUnits)
+	docs = append(docs, findAll(ctx, db, "structures", filter, fetchStructures)...)
 	rank(query, Keywords(query), docs)
 	if len(docs) > k {
 		docs = docs[:k]
@@ -164,7 +185,7 @@ func SearchUnits(ctx context.Context, db *mongo.Database, query, faction string,
 func SearchGear(ctx context.Context, db *mongo.Database, query string, k int) []bson.M {
 	var docs []bson.M
 	for _, coll := range []string{"stratagems", "weapons", "armor", "boosters"} {
-		docs = append(docs, findAll(ctx, db, coll, bson.M{}, 150)...)
+		docs = append(docs, findAll(ctx, db, coll, bson.M{}, fetchGearColl)...)
 	}
 	rank(query, Keywords(query), docs)
 	if len(docs) > k {
@@ -191,7 +212,7 @@ func SearchWorld(ctx context.Context, db *mongo.Database, query string, k int) [
 	for _, w := range words {
 		seen[w] = true
 	}
-	for _, p := range findAll(ctx, db, "planets", bson.M{}, 280) {
+	for _, p := range findAll(ctx, db, "planets", bson.M{}, fetchPlanets) {
 		name, _ := p["name"].(string)
 		sector, _ := p["sector"].(string)
 		blob := strings.ToLower(name + sector)
@@ -201,21 +222,25 @@ func SearchWorld(ctx context.Context, db *mongo.Database, query string, k int) [
 				break
 			}
 		}
-		if len(out) >= k+2 {
+		// Stop once biomes (k) plus up to 2 planet hits are collected;
+		// planets are confirmational here, the extras below carry detail.
+		if len(out) >= k+maxPlanetHits {
 			break
 		}
 	}
 	var extra []bson.M
 	for _, coll := range []string{"missions", "difficulty", "effects"} {
-		extra = append(extra, findAll(ctx, db, coll, bson.M{}, 120)...)
+		extra = append(extra, findAll(ctx, db, coll, bson.M{}, fetchWorldExtra)...)
 	}
 	rank(query, words, extra)
-	if len(extra) > 2 {
-		extra = extra[:2]
+	if len(extra) > maxWorldExtra {
+		extra = extra[:maxWorldExtra]
 	}
 	out = append(out, extra...)
-	if len(out) > k+4 {
-		out = out[:k+4]
+	// Hard ceiling: biomes (k) + planets (maxPlanetHits) + extras
+	// (maxWorldExtra) is the most context one world question may inject.
+	if len(out) > k+maxWorldDocs {
+		out = out[:k+maxWorldDocs]
 	}
 	return out
 }
