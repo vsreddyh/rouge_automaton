@@ -21,8 +21,8 @@ cmd/
 internal/
   config/           # .env contract (shared with the retired Python bot)
   persona/          # SOUL.md → system prompt, Over./serial/voice guards
-  rag/              # Type-U/G/W/L router + keyword retrieval + cited context
-  zen/              # OpenCode Go relay client (Responses API)
+  rag/              # Mongo keyword retrieval + cited context (no router)
+  gorelay/          # OpenCode Go relay client (Responses API + tool loop)
   discord/          # discordgo gateway: allowlist, mention gate, threads
   wiki/             # helldivers.wiki.gg fallback (search + fetch)
   live/             # live war-status API (Type-L)
@@ -59,16 +59,20 @@ podman run --rm --network=host -e MONGO_URI=mongodb://127.0.0.1:27017/rouge \
 ## Discord behavior
 
 - Mention-gated replies (`require_mention: true`), `auto_thread: true`; configured free-response channels answer without a mention (each costs a model call — keep the list short).
-- Greetings (`hi`/`hello`/`hey`): one flat line, e.g. `Helldiver. Make it quick.` — no helpdesk intro, no capability list.
+- Greetings (`hi`/`hello`/`hey`, also `yo`/`o7`): one flat line, e.g. `Helldiver. Make it quick.` — no helpdesk intro, no capability list.
 - Every intel answer: weak point + counter + source (Mongo doc or live link).
 
 ## Answer pipeline
 
 1. Identity questions → answer from `SOUL.md` canon. Serial stays `[REDACTED]`.
-2. Unit intel → route by faction vocabulary, rank Mongo candidates by keyword overlap + name/alias bonus, inject top docs with citations.
-3. Gear / world questions → same router over weapons/stratagems/armor (Type-G) and biomes/planets/missions (Type-W); multi-intent queries fan out and merge.
-4. Miss → `helldivers.wiki.gg` search + fetch (1+1 max), summarized with links. Live-status questions → community war API.
-5. Rate limit (`429`) → exact reply: `The Lost Son is busy spreading democracy on Cyberstan. Hold position, Helldiver — try again shortly. Estimated time of liberation: {n}s.` Other backend failures → `Uplink dead. No fallback. For Super Earth, try later.`
+2. Factual questions → the model calls search tools itself (no code router):
+   `search_units` (weak points, counters, anatomy), `search_gear` (loadouts),
+   `search_world` (biomes, planets, missions), `planet_status` (live war
+   data). Candidates rank by keyword overlap + name/alias bonus; every
+   answer cites its source.
+3. Miss → the model falls back to `wiki_search` (`helldivers.wiki.gg`),
+   summarized with links. Unknowns are reported as unconfirmed, not invented.
+4. Rate limit (`429`) → exact reply: `The Lost Son is busy spreading democracy on Cyberstan. Hold position, Helldiver — try again shortly. Estimated time of liberation: {n}s.` Other backend failures → `Uplink dead. No fallback. For Super Earth, try later.`
 
 Doctrine reminders: flank Hulk/Tank rear vents, Flare Trooper first, objectives (fabricators / bug holes / warp ships) before heavies.
 
