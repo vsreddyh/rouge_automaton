@@ -78,7 +78,17 @@ func Postprocess(reply string, greeting bool) string {
 		return reply
 	}
 	if !overRe.MatchString(reply) {
-		reply = strings.TrimRight(reply, ". ") + ". Over."
+		// Append the sign-off without mangling terminal punctuation we did
+		// not write: strip only trailing spaces, then a trailing run of
+		// periods if present ("Hulk." -> "Hulk. Over."), otherwise join
+		// with a space ("Attack!" -> "Attack! Over."). Ellipses get
+		// normalized the same way — acceptable for a radio sign-off.
+		reply = strings.TrimRight(reply, " ")
+		if strings.HasSuffix(reply, ".") {
+			reply = strings.TrimRight(reply, ".") + ". Over."
+		} else {
+			reply = reply + " Over."
+		}
 	}
 	return reply
 }

@@ -29,6 +29,14 @@ func TestPostprocess(t *testing.T) {
 	if got := Postprocess("Done. Over.", false); got != "Done. Over." {
 		t.Fatalf("stable reply rewritten: %q", got)
 	}
+	// Terminal punctuation we did not write must survive the sign-off:
+	// "Attack!" joins with a space, periods collapse to one ". Over.".
+	if got := Postprocess("Attack!", false); got != "Attack! Over." {
+		t.Fatalf("exclamation mangled: %q", got)
+	}
+	if got := Postprocess("Hulk. Rear vent.", false); got != "Hulk. Rear vent. Over." {
+		t.Fatalf("period join wrong: %q", got)
+	}
 }
 
 func TestSystemPrompt(t *testing.T) {
