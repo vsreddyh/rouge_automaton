@@ -23,6 +23,14 @@ import (
 )
 
 func main() {
+	// run() returns errors instead of calling log.Fatalf so deferred
+	// cleanup (mongo Disconnect) always executes; only main may exit.
+	if err := run(); err != nil {
+		log.Fatalf("watch: %v", err)
+	}
+}
+
+func run() error {
 	mongoURI := flag.String("mongo", os.Getenv("MONGO_URI"), "MongoDB URI")
 	interval := flag.Duration("interval", 5*time.Minute, "poll interval")
 	once := flag.Bool("once", false, "poll once and exit")
@@ -34,13 +42,13 @@ func main() {
 	}
 	client, err := mongo.Connect(options.Client().ApplyURI(*mongoURI))
 	if err != nil {
-		log.Fatalf("mongo: %v", err)
+		return fmt.Errorf("mongo: %w", err)
 	}
 	defer client.Disconnect(context.Background())
 	pingCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := client.Ping(pingCtx, readpref.Primary()); err != nil {
-		log.Fatalf("mongo ping: %v", err)
+		return fmt.Errorf("mongo ping: %w", err)
 	}
 	db := client.Database(config.Config{MongoURI: *mongoURI}.DBName())
 	w := wikiwatch.New(db, wikifeed.New())
@@ -58,11 +66,12 @@ func main() {
 	if *once {
 		n, err := w.RunOnce(ctx)
 		if err != nil {
-			log.Fatalf("watch: %v", err)
+			return err
 		}
 		fmt.Printf("watch: %d change(s)\n", n)
-		return
+		return nil
 	}
 	log.Printf("watch: polling every %s", *interval)
 	w.Run(ctx, *interval)
+	return nil
 }
