@@ -1,6 +1,9 @@
 package wikiparse
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestInfobox(t *testing.T) {
 	wt := `{{Infobox Enemy
@@ -79,5 +82,24 @@ func TestDifficultyAndSize(t *testing.T) {
 	}
 	if got := Health("1,800"); got != 1800 {
 		t.Fatalf("health = %d", got)
+	}
+}
+
+func TestMultibyteTruncate(t *testing.T) {
+	// 400 em-dashes (3 bytes each): a byte cut at 300 would split one and
+	// emit invalid UTF-8, which BSON rejects on write.
+	dashes := strings.Repeat("—", 400)
+	wt := "{{Infobox Enemy\n| description = " + dashes + "\n}}\n== Tactical Information ==\n* " + dashes
+	box := Infobox(wt)
+	if got := box["description"]; strings.Count(got, "—") != 300 {
+		t.Fatalf("infobox cut at 300 runes, got %d dashes", strings.Count(got, "—"))
+	} else if strings.ToValidUTF8(got, "") != got {
+		t.Fatal("infobox cut split a multibyte rune")
+	}
+	if got := Tactics(wt, 8); len(got) != 1 || strings.Count(got[0], "—") != 220 {
+		t.Fatalf("tactics cut wrong: %v", got)
+	}
+	if got := ExtractFirstParagraph(dashes, 100); strings.Count(got, "—") != 100 {
+		t.Fatalf("extract cut wrong: %d dashes", strings.Count(got, "—"))
 	}
 }

@@ -33,6 +33,17 @@ var (
 	healthRe     = regexp.MustCompile(`[\d,]+`)
 )
 
+// cut truncates to n runes (multibyte-safe). Wiki text routinely contains
+// multibyte runes (em-dashes, icons); byte-slicing would split them and
+// emit invalid UTF-8, which BSON rejects on write — failing the whole
+// Refresh. Every truncation in this package goes through cut.
+func cut(s string, n int) string {
+	if r := []rune(s); len(r) > n {
+		return string(r[:n])
+	}
+	return s
+}
+
 // Infobox returns first-seen `| key = value` pairs with markup stripped.
 // Keys are lowercased and truncated at 40 chars; values are capped at 300.
 func Infobox(wikitext string) map[string]string {
@@ -44,10 +55,7 @@ func Infobox(wikitext string) map[string]string {
 			continue
 		}
 		if _, seen := out[k]; !seen {
-			if len(v) > 300 {
-				v = v[:300]
-			}
-			out[k] = v
+			out[k] = cut(v, 300)
 		}
 	}
 	return out
@@ -83,10 +91,7 @@ func Tactics(wikitext string, cap int) []string {
 			continue
 		}
 		if c := cleanBullet(t); c != "" {
-			if len(c) > 220 {
-				c = c[:220]
-			}
-			out = append(out, c)
+			out = append(out, cut(c, 220))
 		}
 		if len(out) >= cap {
 			break
@@ -130,10 +135,7 @@ func Anatomy(wikitext string, cap int) []AnatomyRow {
 			k := strings.ToLower(strings.TrimSpace(m[1]))
 			v := strings.TrimSpace(tagRe.ReplaceAllString(m[2], ""))
 			if _, seen := params[k]; !seen && v != "" {
-				if len(v) > 80 {
-					v = v[:80]
-				}
-				params[k] = v
+				params[k] = cut(v, 80)
 			}
 		}
 		if params["part_name"] == "" {
@@ -163,10 +165,7 @@ func SectionList(wikitext, heading string, cap int) ([]string, bool) {
 		s = strings.TrimSpace(s)
 		if s != "" && !seen[s] {
 			seen[s] = true
-			if len(s) > 220 {
-				s = s[:220]
-			}
-			items = append(items, s)
+			items = append(items, cut(s, 220))
 		}
 	}
 	for _, m := range condTplRe.FindAllStringSubmatch(body, -1) {
@@ -249,10 +248,7 @@ func ExtractFirstParagraph(extract string, cap int) string {
 	if i := strings.Index(extract, "\n\n"); i >= 0 {
 		first = extract[:i]
 	}
-	if len(first) > cap {
-		first = first[:cap]
-	}
-	return first
+	return cut(first, cap)
 }
 
 func atoi(s string) int {
