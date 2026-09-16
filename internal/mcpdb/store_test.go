@@ -1,4 +1,4 @@
-package rag
+package mcpdb
 
 import (
 	"testing"

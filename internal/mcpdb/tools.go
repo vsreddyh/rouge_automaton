@@ -15,7 +15,6 @@ import (
 	"github.com/vsreddyh/rouge_automaton/internal/config"
 	"github.com/vsreddyh/rouge_automaton/internal/gorelay"
 	"github.com/vsreddyh/rouge_automaton/internal/live"
-	"github.com/vsreddyh/rouge_automaton/internal/rag"
 	"github.com/vsreddyh/rouge_automaton/internal/wiki"
 )
 
@@ -104,14 +103,14 @@ func (e *Executor) Execute(ctx context.Context, name, argsJSON string) string {
 	}
 	switch name {
 	case "search_units":
-		docs := rag.SearchUnits(ctx, e.DB, query, strArg(args, "faction"), k)
-		return withEmptyHint(rag.FormatContext(docs), query)
+		docs := SearchUnits(ctx, e.DB, query, strArg(args, "faction"), k)
+		return withEmptyHint(FormatContext(docs), query)
 	case "search_gear":
-		docs := rag.SearchGear(ctx, e.DB, query, k)
-		return withEmptyHint(rag.FormatContext(docs), query)
+		docs := SearchGear(ctx, e.DB, query, k)
+		return withEmptyHint(FormatContext(docs), query)
 	case "search_world":
-		docs := rag.SearchWorld(ctx, e.DB, query, k)
-		return withEmptyHint(rag.FormatContext(docs), query)
+		docs := SearchWorld(ctx, e.DB, query, k)
+		return withEmptyHint(FormatContext(docs), query)
 	case "planet_status":
 		if line := e.Live.PlanetLine(ctx, strArg(args, "name")); line != "" {
 			return line

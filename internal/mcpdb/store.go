@@ -1,9 +1,9 @@
-// Package rag is the Mongo retrieval layer: keyword-first ranking with a
-// name/alias bonus, no vectors, and — deliberately — no router. There is no
-// vocabulary list anywhere in this package: the model decides what to look
-// up and calls the Search* functions with the user's own words. At ~900
-// docs the keyword scorer is cheaper, deterministic, and testable.
-package rag
+// Retrieval helpers: Mongo keyword search with name/alias-boosted ranking,
+// no vectors, and — deliberately — no router. There is no vocabulary list
+// anywhere here: the model decides what to look up and calls the Search*
+// functions with the user's own words. At ~900 docs the keyword scorer is
+// cheaper, deterministic, and testable.
+package mcpdb
 
 import (
 	"context"
