@@ -27,6 +27,14 @@ import (
 )
 
 func main() {
+	// run() returns errors instead of calling log.Fatalf so deferred
+	// cleanup (mongo Disconnect) always executes; only main may exit.
+	if err := run(); err != nil {
+		log.Fatalf("mcpdb: %v", err)
+	}
+}
+
+func run() error {
 	mongoURI := flag.String("mongo", os.Getenv("MONGO_URI"), "MongoDB URI (default: $MONGO_URI or config default)")
 	flag.Parse()
 	// Full env config (war-API base/headers included) with the flag winning
@@ -37,13 +45,13 @@ func main() {
 	}
 	client, err := mongo.Connect(options.Client().ApplyURI(cfg.MongoURI))
 	if err != nil {
-		log.Fatalf("mongo: %v", err)
+		return fmt.Errorf("mongo: %w", err)
 	}
 	defer client.Disconnect(context.Background())
 	pingCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := client.Ping(pingCtx, readpref.Primary()); err != nil {
-		log.Fatalf("mongo ping: %v", err)
+		return fmt.Errorf("mongo ping: %w", err)
 	}
 	// Logs go to stderr: stdout is the JSON-RPC channel.
 	log.SetOutput(os.Stderr)
@@ -54,6 +62,7 @@ func main() {
 	defer stop()
 	fmt.Fprintln(os.Stderr, "rouge-mcpdb serving on stdio")
 	if err := server.Run(ctx, &mcp.StdioTransport{}); err != nil {
-		log.Fatalf("server: %v", err)
+		return err
 	}
+	return nil
 }
