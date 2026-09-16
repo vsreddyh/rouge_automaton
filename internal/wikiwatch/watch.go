@@ -283,11 +283,13 @@ func (w *Watcher) Backfill(ctx context.Context) (int, error) {
 			}
 			title := strings.ReplaceAll(url[strings.LastIndex(url, "/wiki/")+len("/wiki/"):], "_", " ")
 			rev := numInt(doc["rev_id"])
-			_, err := w.DB.Collection("tracked_pages").UpdateOne(ctx,
+			res, err := w.DB.Collection("tracked_pages").UpdateOne(ctx,
 				bson.M{"title": title},
 				bson.M{"$set": bson.M{"url": url, "collection": coll, "rev_id": rev}},
 				options.UpdateOne().SetUpsert(true))
-			if err == nil {
+			// Count only rows this run created: re-fetched rows report
+			// MatchedCount, so restarts no longer overstate the log line.
+			if err == nil && res.UpsertedCount > 0 {
 				seen++
 			}
 		}

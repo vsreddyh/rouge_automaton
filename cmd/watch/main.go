@@ -61,7 +61,7 @@ func run() error {
 	if err != nil {
 		log.Printf("watch: backfill: %v", err)
 	}
-	log.Printf("watch: backfill tracked %d doc(s)", seen)
+	log.Printf("watch: backfill added %d new tracked doc(s)", seen)
 
 	if *once {
 		n, err := w.RunOnce(ctx)
