@@ -37,6 +37,14 @@ type dataFile struct {
 }
 
 func main() {
+	// run() returns errors instead of calling log.Fatalf so deferred
+	// cleanup (mongo Disconnect) always executes; only main may exit.
+	if err := run(); err != nil {
+		log.Fatalf("ingest: %v", err)
+	}
+}
+
+func run() error {
 	mongoURI := flag.String("mongo", os.Getenv("MONGO_URI"), "MongoDB URI")
 	dataDir := flag.String("data", "skills/rouge-automaton/data", "seed JSON dir")
 	flag.Parse()
@@ -45,17 +53,17 @@ func main() {
 	}
 	files, err := filepath.Glob(filepath.Join(*dataDir, "*.json"))
 	if err != nil || len(files) == 0 {
-		log.Fatalf("no seed files in %s", *dataDir)
+		return fmt.Errorf("no seed files in %s", *dataDir)
 	}
 	client, err := mongo.Connect(options.Client().ApplyURI(*mongoURI))
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 	defer client.Disconnect(context.Background())
 	pingCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := client.Ping(pingCtx, readpref.Primary()); err != nil {
-		log.Fatalf("mongo ping: %v", err)
+		return fmt.Errorf("mongo ping: %w", err)
 	}
 	db := client.Database(config.Config{MongoURI: *mongoURI}.DBName())
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
@@ -65,17 +73,17 @@ func main() {
 		Keys:    bson.D{{Key: "faction", Value: 1}, {Key: "name", Value: 1}},
 		Options: options.Index().SetUnique(true),
 	}); err != nil {
-		log.Fatalf("index: %v", err)
+		return fmt.Errorf("index: %w", err)
 	}
 	// name -> aliases for coverage checks.
 	known := map[string][]string{}
 	cur, err := coll.Find(ctx, bson.M{})
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 	var found []bson.M
 	if err := cur.All(ctx, &found); err != nil {
-		log.Fatal(err)
+		return err
 	}
 	if err := cur.Close(ctx); err != nil {
 		log.Printf("cursor close: %v", err)
@@ -122,11 +130,11 @@ func main() {
 	for _, f := range files {
 		raw, err := os.ReadFile(f)
 		if err != nil {
-			log.Fatal(err)
+			return err
 		}
 		var d dataFile
 		if err := json.Unmarshal(raw, &d); err != nil {
-			log.Fatalf("%s: %v", f, err)
+			return fmt.Errorf("%s: %w", f, err)
 		}
 		faction := strings.ToLower(d.Faction)
 		if faction == "" {
@@ -158,11 +166,12 @@ func main() {
 	}
 	if len(ops) == 0 {
 		fmt.Println("ingest: nothing to do")
-		return
+		return nil
 	}
 	res, err := coll.BulkWrite(ctx, ops)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 	fmt.Printf("ingest: upserted=%d matched=%d\n", res.UpsertedCount, res.MatchedCount)
+	return nil
 }
