@@ -1,0 +1,60 @@
+# Go port compose. Shares the rouge-mongo-data volume with the Python stack.
+#
+# CUTOVER ORDER — the two bots must never run together: both reply to the
+# same Discord channels, so co-running means double replies on every
+# message. The -go container names below exist only to avoid name
+# collisions during the brief cutover window, not to permit co-running:
+#   1. podman-compose -f podman-compose.yml stop bot watcher
+#   2. podman-compose -f podman-compose.go.yml up -d
+# GREEN-FIELD: the mongo volume does not exist yet; the mongo service below
+# creates it empty on first up — then seed it once (ENTRYPOINT override is
+# required: the image boots /rouge by default, so a trailing /ingest alone
+# would be swallowed as an argument to the bot):
+#   podman run --rm --network=host --entrypoint /ingest \
+#     -v $PWD/skills:/app/skills \
+#     -e MONGO_URI=mongodb://127.0.0.1:27017/rouge \
+#     localhost/rouge-automaton-go:latest
+#   (wiki enrichment runs in Go, via the watcher-go service added in st/08.)
+# WATCHER: freshness comes from the watcher-go service, which lands in
+# st/08-watcher — not present at this layer. Until then, re-run /ingest to
+# refresh seeds (it never clobbers wiki-enriched fields).
+services:
+  bot-go:
+    build:
+      context: .
+      dockerfile: ContainerfileGo
+    image: localhost/rouge-automaton-go:latest
+    container_name: rouge-automaton-go
+    network_mode: host
+    env_file: .env
+    environment:
+      MONGO_URI: mongodb://127.0.0.1:27017/rouge
+      SKILLS_DIR: /app/skills
+    restart: unless-stopped
+    depends_on:
+      - mongo
+  watcher-go:
+    image: localhost/rouge-automaton-go:latest
+    container_name: rouge-watcher-go
+    network_mode: host
+    entrypoint: ["/watch"]
+    command: ["--interval", "5m"]
+    env_file: .env
+    environment:
+      MONGO_URI: mongodb://127.0.0.1:27017/rouge
+    restart: unless-stopped
+    depends_on:
+      - mongo
+  mongo:
+    image: docker.io/library/mongo:7-jammy
+    container_name: rouge-mongo-go
+    ports:
+      - "127.0.0.1:27017:27017"
+    volumes:
+      - mongo-data:/data/db
+    restart: unless-stopped
+
+volumes:
+  mongo-data:
+    external: true
+    name: rouge-mongo-data
