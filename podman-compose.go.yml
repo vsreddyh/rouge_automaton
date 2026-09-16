@@ -7,13 +7,17 @@
 #   1. podman-compose -f podman-compose.yml stop bot watcher
 #   2. podman-compose -f podman-compose.go.yml up -d
 # GREEN-FIELD: the mongo volume does not exist yet; the mongo service below
-# creates it empty on first up — then seed it once:
-#   podman run --rm --network=host -v $PWD/skills:/app/skills \
+# creates it empty on first up — then seed it once (ENTRYPOINT override is
+# required: the image boots /rouge by default, so a trailing /ingest alone
+# would be swallowed as an argument to the bot):
+#   podman run --rm --network=host --entrypoint /ingest \
+#     -v $PWD/skills:/app/skills \
 #     -e MONGO_URI=mongodb://127.0.0.1:27017/rouge \
-#     localhost/rouge-automaton-go:latest /ingest
-#   (wiki enrichment runs in Go, via the watcher-go service below.)
-# WATCHER: the Go watcher polls the RecentChanges Atom feed and re-parses
-# changed pages; no Python dependency remains.
+#     localhost/rouge-automaton-go:latest
+#   (wiki enrichment runs in Go, via the watcher-go service added in st/08.)
+# WATCHER: freshness comes from the watcher-go service, which lands in
+# st/08-watcher — not present at this layer. Until then, re-run /ingest to
+# refresh seeds (it never clobbers wiki-enriched fields).
 services:
   bot-go:
     build:

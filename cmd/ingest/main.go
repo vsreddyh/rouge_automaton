@@ -75,19 +75,20 @@ func run() error {
 	}); err != nil {
 		return fmt.Errorf("index: %w", err)
 	}
-	// name -> aliases for coverage checks.
-	known := map[string][]string{}
-	cur, err := coll.Find(ctx, bson.M{})
+	// name -> aliases for coverage checks. Project only what covered()
+	// needs: pulling whole docs here would drag wiki_text/blob payloads
+	// for a membership test.
+	cur, err := coll.Find(ctx, bson.M{},
+		options.Find().SetProjection(bson.M{"name": 1, "aliases": 1}))
 	if err != nil {
 		return err
 	}
+	defer cur.Close(ctx)
 	var found []bson.M
 	if err := cur.All(ctx, &found); err != nil {
 		return err
 	}
-	if err := cur.Close(ctx); err != nil {
-		log.Printf("cursor close: %v", err)
-	}
+	known := map[string][]string{}
 	for _, d := range found {
 		if n, ok := d["name"].(string); ok {
 			var al []string
@@ -156,7 +157,9 @@ func run() error {
 				"source_url":    "",
 				"rev_id":        0,
 				"patch_version": "",
-				"fetched_at":    nil,
+				// No fetched_at: absent until the watcher writes a real
+				// timestamp. An explicit null would sit beside strings in
+				// the same field across docs.
 			}
 			ops = append(ops, mongo.NewUpdateOneModel().
 				SetFilter(bson.M{"faction": faction, "name": u.Name}).
