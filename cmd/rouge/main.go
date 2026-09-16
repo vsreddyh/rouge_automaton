@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"os"
 	"os/signal"
 	"strings"
 	"syscall"
@@ -20,28 +19,36 @@ import (
 )
 
 func main() {
+	// run() returns errors instead of calling log.Fatalf so deferred
+	// cleanup (mongo Disconnect) always executes; only main may exit.
+	if err := run(); err != nil {
+		log.Fatalf("rouge: %v", err)
+	}
+}
+
+func run() error {
 	cfg := config.Load()
 	if strings.TrimSpace(cfg.DiscordBotToken) == "" || strings.TrimSpace(cfg.OpenCodeGoAPIKey) == "" {
-		fmt.Fprintln(os.Stderr, "DISCORD_BOT_TOKEN and OPENCODE_GO_API_KEY are required")
-		os.Exit(1)
+		return fmt.Errorf("DISCORD_BOT_TOKEN and OPENCODE_GO_API_KEY are required")
 	}
 	client, err := mongo.Connect(options.Client().ApplyURI(cfg.MongoURI))
 	if err != nil {
-		log.Fatalf("mongo: %v", err)
+		return fmt.Errorf("mongo: %w", err)
 	}
 	defer client.Disconnect(context.Background())
 	pingCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := client.Ping(pingCtx, readpref.Primary()); err != nil {
-		log.Fatalf("mongo ping: %v", err)
+		return fmt.Errorf("mongo ping: %w", err)
 	}
 	bot, err := godiscord.New(cfg, client.Database(cfg.DBName()))
 	if err != nil {
-		log.Fatalf("discord: %v", err)
+		return fmt.Errorf("discord: %w", err)
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	if err := bot.Start(ctx); err != nil {
-		log.Fatalf("gateway: %v", err)
+		return fmt.Errorf("gateway: %w", err)
 	}
+	return nil
 }
