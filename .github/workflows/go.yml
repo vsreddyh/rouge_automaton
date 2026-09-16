@@ -11,6 +11,9 @@ jobs:
         with:
           go-version: "1.25"
       - name: fmt
-        run: test -z "$(gofmt -l cmd internal souldata.go)"
+        # NOTE: souldata.go does not exist yet at this layer (it arrives in
+        # st/02-persona, which extends this line). A missing path would make
+        # gofmt cover one fewer path silently, so keep this list exact here.
+        run: test -z "$(gofmt -l cmd internal)"
       - name: vet-test-build
         run: go vet ./... && go test ./... && go build ./...
