@@ -58,7 +58,7 @@ podman run --rm --network=host -e MONGO_URI=mongodb://127.0.0.1:27017/rouge \
 
 ## Discord behavior
 
-- Mention-gated replies (`require_mention: true`), `auto_thread: true`: a mention opens a thread that stays a live session — follow-ups in threads the bot opened or has spoken in answer without a fresh mention (same relay session, keyed by thread ID). Strangers' threads still need a mention. Outside threads, a mention is required; configured free-response channels answer without a mention (each costs a model call — keep the list short).
+- Mention-gated replies (`require_mention: true`), `auto_thread: true`: a mention opens a thread and the answer lands inside it — follow-ups in threads the bot opened or has spoken in answer without a fresh mention (same relay session, keyed by thread ID). Strangers' threads still need a mention. Outside threads, a mention is required; configured free-response channels answer without a mention (each costs a model call — keep the list short).
 - Greetings (`hi`/`hello`/`hey`, also `yo`/`o7`): answered by the model as one flat line in a single tool-free round trip, e.g. `Helldiver. Make it quick.` — no helpdesk intro, no capability list.
 - Every intel answer: weak point + counter + source (Mongo doc or live link).
 

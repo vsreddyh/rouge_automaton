@@ -187,13 +187,18 @@ func (b *Bot) onMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 	// Greetings go through the model like everything else; the system prompt
 	// pins the one-line shape and Postprocess cuts to the first line.
 	greeting := persona.IsGreeting(q)
+	// The answer goes into the thread the bot opens, not the parent
+	// channel: replying to m.ChannelID after creating a thread leaves the
+	// thread empty and splits the conversation in two.
+	replyChannel := m.ChannelID
 	if b.Cfg.AutoThread && m.Thread == nil && ch != nil && ch.Type == discordgo.ChannelTypeGuildText {
 		name := strings.ReplaceAll(cutRunes(q, 60), "\n", " ")
 		if th, err := s.MessageThreadStartComplex(m.ChannelID, m.ID, &discordgo.ThreadStart{
 			Name:                name,
 			AutoArchiveDuration: 60,
-		}); err == nil && th != nil {
+		}); err == nil && th != nil && th.ID != "" {
 			b.threads.add(th.ID)
+			replyChannel = th.ID
 		}
 	}
 	var history []gorelay.Message
@@ -211,8 +216,9 @@ func (b *Bot) onMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 	// persona plus tool procedure, and the model pulls whatever intel it
 	// needs through the think-act loop below.
 	system := persona.SystemPrompt() + mcpdb.ToolGuidance
-	// In threads, ChannelID is the thread ID, so the relay session stays
-	// continuous after auto-thread creation.
+	// The relay session follows the reply channel: a fresh thread gets its
+	// own session, and follow-ups inside it (ChannelID == thread ID) stay
+	// continuous with the answer that opened it.
 	tools := mcpdb.ToolDefs()
 	exec := b.Tools.Execute
 	if greeting {
@@ -220,10 +226,19 @@ func (b *Bot) onMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 		// model answers directly and Postprocess cuts to the one-liner.
 		tools, exec = nil, nil
 	}
-	reply := persona.Postprocess(b.Relay.ChatWithTools(ctx, system, q, history, m.ChannelID, tools, exec), greeting)
+	reply := persona.Postprocess(b.Relay.ChatWithTools(ctx, system, q, history, replyChannel, tools, exec), greeting)
 	reply = cutRunes(reply, 2000)
-	if sent, err := s.ChannelMessageSendReply(m.ChannelID, reply, m.Reference()); err == nil && sent != nil && ch != nil && ch.IsThread() {
-		// Spoke in a thread: it is a live session from here on.
-		b.threads.add(ch.ID)
+	if replyChannel == m.ChannelID {
+		if sent, err := s.ChannelMessageSendReply(m.ChannelID, reply, m.Reference()); err == nil && sent != nil && ch != nil && ch.IsThread() {
+			// Spoke in a thread: it is a live session from here on.
+			b.threads.add(ch.ID)
+		}
+		return
+	}
+	// A fresh thread has no message to reference yet (the starter lives in
+	// the parent), so plain-send; on failure fall back to a channel reply
+	// rather than staying silent.
+	if _, err := s.ChannelMessageSend(replyChannel, reply); err != nil {
+		_, _ = s.ChannelMessageSendReply(m.ChannelID, reply, m.Reference())
 	}
 }
