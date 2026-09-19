@@ -184,9 +184,6 @@ func (b *Bot) onMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
-	// Greetings go through the model like everything else; the system prompt
-	// pins the one-line shape and Postprocess cuts to the first line.
-	greeting := persona.IsGreeting(q)
 	// The answer goes into the thread the bot opens, not the parent
 	// channel: replying to m.ChannelID after creating a thread leaves the
 	// thread empty and splits the conversation in two.
@@ -214,19 +211,13 @@ func (b *Bot) onMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 	}
 	// No router and no pre-fetched context: the system prompt carries the
 	// persona plus tool procedure, and the model pulls whatever intel it
-	// needs through the think-act loop below.
+	// needs through the think-act loop below. Every message — greetings
+	// included — is answered by the model; nothing is canned.
 	system := persona.SystemPrompt() + mcpdb.ToolGuidance
 	// The relay session follows the reply channel: a fresh thread gets its
 	// own session, and follow-ups inside it (ChannelID == thread ID) stay
 	// continuous with the answer that opened it.
-	tools := mcpdb.ToolDefs()
-	exec := b.Tools.Execute
-	if greeting {
-		// Bare greetings get one cheap round trip: no tools offered, so the
-		// model answers directly and Postprocess cuts to the one-liner.
-		tools, exec = nil, nil
-	}
-	reply := persona.Postprocess(b.Relay.ChatWithTools(ctx, system, q, history, replyChannel, tools, exec), greeting)
+	reply := persona.Postprocess(b.Relay.ChatWithTools(ctx, system, q, history, replyChannel, mcpdb.ToolDefs(), b.Tools.Execute))
 	reply = cutRunes(reply, 2000)
 	if replyChannel == m.ChannelID {
 		if sent, err := s.ChannelMessageSendReply(m.ChannelID, reply, m.Reference()); err == nil && sent != nil && ch != nil && ch.IsThread() {
