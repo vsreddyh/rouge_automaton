@@ -6,6 +6,7 @@ import (
 	"context"
 	"log"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -26,6 +27,38 @@ type Bot struct {
 	Cfg     config.Config
 	Relay   *gorelay.Client
 	Tools   *mcpdb.Executor
+	// threads holds live bot sessions: thread IDs the bot opened plus
+	// thread IDs it has spoken in since boot. Zero value is ready.
+	threads threadSet
+}
+
+// threadSet is a mutex-guarded set of live-session thread IDs, safe for
+// concurrent onMessage handlers.
+type threadSet struct {
+	mu  sync.Mutex
+	ids map[string]bool
+}
+
+// has reports whether id is a tracked live session. A nil map reads as
+// empty, so the zero value is safe to query.
+func (t *threadSet) has(id string) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.ids[id]
+}
+
+// add tracks id as a live session. Empty IDs are dropped, and the map is
+// allocated lazily so the zero value is safe to write.
+func (t *threadSet) add(id string) {
+	if id == "" {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.ids == nil {
+		t.ids = map[string]bool{}
+	}
+	t.ids[id] = true
 }
 
 // New creates a session with the required intents.
@@ -84,6 +117,40 @@ func cutRunes(s string, n int) string {
 	return string([]rune(s)[:n])
 }
 
+// gatePass is the mention-gate truth table: open-allowlist mode admits
+// everything; otherwise a mention, a free-response channel, or a live
+// thread session is required.
+func gatePass(requireMention, mentioned, freeChannel, liveSession bool) bool {
+	return !requireMention || mentioned || freeChannel || liveSession
+}
+
+// liveSession reports whether ch is a thread holding an active bot session:
+// opened by the bot (tracked) or already containing a bot reply. Plain
+// channels, unknown threads, and lookup failures all return false, so the
+// gate fails closed — a stranger's thread still needs a mention.
+func (b *Bot) liveSession(s *discordgo.Session, ch *discordgo.Channel) bool {
+	if ch == nil || !ch.IsThread() {
+		return false
+	}
+	if b.threads.has(ch.ID) {
+		return true
+	}
+	self := b.selfID()
+	if self == "" {
+		return false
+	}
+	msgs, err := s.ChannelMessages(ch.ID, 10, "", "", "")
+	if err != nil {
+		return false
+	}
+	for _, msg := range msgs {
+		if msg.Author != nil && msg.Author.ID == self {
+			return true
+		}
+	}
+	return false
+}
+
 func (b *Bot) onMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 	if m.Author == nil || m.Author.Bot || !b.Cfg.Allowed(m.Author.ID) {
 		return
@@ -92,7 +159,21 @@ func (b *Bot) onMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 	if self == "" {
 		return
 	}
-	if b.Cfg.RequireMention && !(b.mentioned(m) || b.Cfg.FreeResponseChannels[m.ChannelID]) {
+	mentioned := b.mentioned(m)
+	free := b.Cfg.FreeResponseChannels[m.ChannelID]
+	// One channel lookup serves both the thread-session gate and the
+	// auto-thread guard below. It runs only when one of them needs it, so
+	// the hot path (mentioned, or free channel with no threading) costs no
+	// extra call; a failed lookup fails the gate closed.
+	var ch *discordgo.Channel
+	if (b.Cfg.RequireMention && !mentioned && !free) || (b.Cfg.AutoThread && m.Thread == nil) {
+		if c, err := s.Channel(m.ChannelID); err == nil && c != nil {
+			ch = c
+		} else if b.Cfg.RequireMention && !mentioned && !free {
+			return
+		}
+	}
+	if !gatePass(b.Cfg.RequireMention, mentioned, free, b.liveSession(s, ch)) {
 		return
 	}
 	q := strings.ReplaceAll(m.Content, "<@"+self+">", "")
@@ -103,17 +184,16 @@ func (b *Bot) onMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
-	if persona.IsGreeting(q) {
-		_, _ = s.ChannelMessageSendReply(m.ChannelID, "Helldiver. Make it quick.", m.Reference())
-		return
-	}
-	if b.Cfg.AutoThread && m.Thread == nil {
-		if ch, err := s.Channel(m.ChannelID); err == nil && ch.Type == discordgo.ChannelTypeGuildText {
-			name := strings.ReplaceAll(cutRunes(q, 60), "\n", " ")
-			_, _ = s.MessageThreadStartComplex(m.ChannelID, m.ID, &discordgo.ThreadStart{
-				Name:                name,
-				AutoArchiveDuration: 60,
-			})
+	// Greetings go through the model like everything else; the system prompt
+	// pins the one-line shape and Postprocess cuts to the first line.
+	greeting := persona.IsGreeting(q)
+	if b.Cfg.AutoThread && m.Thread == nil && ch != nil && ch.Type == discordgo.ChannelTypeGuildText {
+		name := strings.ReplaceAll(cutRunes(q, 60), "\n", " ")
+		if th, err := s.MessageThreadStartComplex(m.ChannelID, m.ID, &discordgo.ThreadStart{
+			Name:                name,
+			AutoArchiveDuration: 60,
+		}); err == nil && th != nil {
+			b.threads.add(th.ID)
 		}
 	}
 	var history []gorelay.Message
@@ -133,7 +213,17 @@ func (b *Bot) onMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 	system := persona.SystemPrompt() + mcpdb.ToolGuidance
 	// In threads, ChannelID is the thread ID, so the relay session stays
 	// continuous after auto-thread creation.
-	reply := persona.Postprocess(b.Relay.ChatWithTools(ctx, system, q, history, m.ChannelID, mcpdb.ToolDefs(), b.Tools.Execute), false)
+	tools := mcpdb.ToolDefs()
+	exec := b.Tools.Execute
+	if greeting {
+		// Bare greetings get one cheap round trip: no tools offered, so the
+		// model answers directly and Postprocess cuts to the one-liner.
+		tools, exec = nil, nil
+	}
+	reply := persona.Postprocess(b.Relay.ChatWithTools(ctx, system, q, history, m.ChannelID, tools, exec), greeting)
 	reply = cutRunes(reply, 2000)
-	_, _ = s.ChannelMessageSendReply(m.ChannelID, reply, m.Reference())
+	if sent, err := s.ChannelMessageSendReply(m.ChannelID, reply, m.Reference()); err == nil && sent != nil && ch != nil && ch.IsThread() {
+		// Spoke in a thread: it is a live session from here on.
+		b.threads.add(ch.ID)
+	}
 }

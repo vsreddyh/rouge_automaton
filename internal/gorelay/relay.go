@@ -249,7 +249,8 @@ func (c *Client) ChatWithTools(ctx context.Context, system, query string, histor
 		session = "rouge-main"
 	}
 	url := strings.TrimSuffix(c.BaseURL, "/") + "/v1/responses"
-	var specs []any
+	// Non-nil so the wire shape is [] on the tool-free path, never null.
+	specs := []any{}
 	for _, t := range tools {
 		specs = append(specs, map[string]any{
 			"type": "function", "name": t.Name,
@@ -277,6 +278,12 @@ func (c *Client) ChatWithTools(ctx context.Context, system, query string, histor
 		if len(calls) == 0 {
 			// No text either (doRound would have returned it): stop
 			// rather than spin on content-free rounds.
+			return Dead
+		}
+		if exec == nil {
+			// Tool-free path (greetings) offered no tools, so a function
+			// call is unexpected: Dead, never a nil-executor panic.
+			log.Printf("gorelay: unexpected tool call with nil executor")
 			return Dead
 		}
 		for _, call := range calls {
