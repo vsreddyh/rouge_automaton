@@ -162,3 +162,29 @@ func TestChatWithToolsNoCall(t *testing.T) {
 		t.Fatalf("passthrough failed: %q called=%v", got, called)
 	}
 }
+
+// TestChatWithToolsNilExec locks in the tool-free path: an unexpected
+// function call with a nil executor must resolve to Dead, never panic.
+func TestChatWithToolsNilExec(t *testing.T) {
+	rounds := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rounds++
+		var v struct {
+			Tools []any `json:"tools"`
+		}
+		raw, _ := io.ReadAll(r.Body)
+		json.Unmarshal(raw, &v)
+		if v.Tools == nil {
+			t.Error("tools must marshal as [], never null")
+		}
+		w.Write([]byte(`{"output":[{"type":"function_call","call_id":"call_9","name":"search_units","arguments":"{}"}]}`))
+	}))
+	defer srv.Close()
+	c := &Client{BaseURL: srv.URL, HTTP: srv.Client()}
+	if got := c.ChatWithTools(context.Background(), "", "hi", nil, "s", nil, nil); got != Dead {
+		t.Fatalf("nil exec must be Dead: %q", got)
+	}
+	if rounds != 1 {
+		t.Fatalf("nil exec must stop after one round, got %d", rounds)
+	}
+}
