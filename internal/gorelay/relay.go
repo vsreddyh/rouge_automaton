@@ -226,6 +226,26 @@ func (c *Client) doRound(ctx context.Context, url, session string, body []byte) 
 // turn into an unbounded relay session.
 const maxToolRounds = 3
 
+// ackNudge is the one-shot follow-up when the model narrates a lookup
+// ("Checking Fury's war status. Over.") instead of emitting the function
+// call: first text would otherwise end the loop and strand the user with
+// an ack and no intel. Costs one extra round, and only on offending turns.
+const ackNudge = "You said you would check — now emit the function_call. No prose, no ack."
+
+// lookupAckRe spots narrated intent: a lookup verb with a lookup object.
+// Verb-only is not enough ("checking in, diver" is a greeting); the object
+// noun keeps greetings and finished answers out of the nudge path.
+var lookupAckRe = regexp.MustCompile(`(?i)\b(checking|looking up|looking into|searching|fetching|pulling up|verifying|confirming)\b.{0,80}?\b(status|intel|records|database|wiki|archives|front|lines|data|info|entry|manifest)\b`)
+
+// isLookupAck reports whether s narrates a lookup instead of answering.
+// Canned backend replies are never acks, even if they share a word.
+func isLookupAck(s string) bool {
+	if strings.HasPrefix(s, Dead) || strings.Contains(s, "Hold position, Helldiver") {
+		return false
+	}
+	return lookupAckRe.MatchString(s)
+}
+
 // ChatWithTools runs the think-act loop: the model may call the offered
 // tools (each executed by exec, which returns plain-text results) before
 // answering. The first message text ends the loop. Tool results that are
@@ -257,6 +277,7 @@ func (c *Client) ChatWithTools(ctx context.Context, system, query string, histor
 			"description": t.Description, "parameters": t.Parameters,
 		})
 	}
+	nudged := false
 	for round := 0; round < maxToolRounds; round++ {
 		// Same infallible-shape guarantee as Chat: no error to handle.
 		body, _ := json.Marshal(map[string]any{
@@ -267,6 +288,16 @@ func (c *Client) ChatWithTools(ctx context.Context, system, query string, histor
 		})
 		res := c.doRound(ctx, url, session, body)
 		if !res.ok {
+			// Text normally ends the loop — except a lookup-intent ack
+			// with no function call behind it. Nudge once (the loop cap
+			// still bounds total rounds); a second ack returns as-is.
+			// Tool-free turns (greetings) pass straight through.
+			if !nudged && exec != nil && len(tools) > 0 && isLookupAck(res.reply) {
+				nudged = true
+				input = append(input, Message{Role: "assistant", Content: res.reply})
+				input = append(input, Message{Role: "user", Content: ackNudge})
+				continue
+			}
 			return res.reply
 		}
 		var calls []outputItem

@@ -24,6 +24,8 @@ import (
 const ToolGuidance = `
 Tool procedure: for any factual question (units, gear, places, war status),
 call the matching search tool BEFORE answering — never answer from memory.
+Never narrate intent ("Checking...", "Looking it up..."): either emit the
+function call or the final answer — an ack without a call strands the user.
 You may chain calls (e.g. search_units, then planet_status for the same
 front). Every intel answer names weak point + counter + source, stays under
 120 words, and ends with "Over." on its own beat. If a tool returns no
