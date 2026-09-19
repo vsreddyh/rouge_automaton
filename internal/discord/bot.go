@@ -84,6 +84,18 @@ func cutRunes(s string, n int) string {
 	return string([]rune(s)[:n])
 }
 
+// inThread reports whether a channel is a Discord thread. A mention opens a
+// thread that stays a live session, so follow-ups there answer without a
+// fresh mention. The lookup hits the state cache first and falls back to one
+// Channel API call only when the cheap gates (mention, free channel) missed.
+func (b *Bot) inThread(s *discordgo.Session, channelID string) bool {
+	ch, err := s.Channel(channelID)
+	if err != nil || ch == nil {
+		return false
+	}
+	return ch.IsThread()
+}
+
 func (b *Bot) onMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 	if m.Author == nil || m.Author.Bot || !b.Cfg.Allowed(m.Author.ID) {
 		return
@@ -92,7 +104,7 @@ func (b *Bot) onMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 	if self == "" {
 		return
 	}
-	if b.Cfg.RequireMention && !(b.mentioned(m) || b.Cfg.FreeResponseChannels[m.ChannelID]) {
+	if b.Cfg.RequireMention && !b.mentioned(m) && !b.Cfg.FreeResponseChannels[m.ChannelID] && !b.inThread(s, m.ChannelID) {
 		return
 	}
 	q := strings.ReplaceAll(m.Content, "<@"+self+">", "")
@@ -103,10 +115,9 @@ func (b *Bot) onMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
-	if persona.IsGreeting(q) {
-		_, _ = s.ChannelMessageSendReply(m.ChannelID, "Helldiver. Make it quick.", m.Reference())
-		return
-	}
+	// Greetings go through the model like everything else; the system prompt
+	// pins the one-line shape and Postprocess cuts to the first line.
+	greeting := persona.IsGreeting(q)
 	if b.Cfg.AutoThread && m.Thread == nil {
 		if ch, err := s.Channel(m.ChannelID); err == nil && ch.Type == discordgo.ChannelTypeGuildText {
 			name := strings.ReplaceAll(cutRunes(q, 60), "\n", " ")
@@ -133,7 +144,7 @@ func (b *Bot) onMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 	system := persona.SystemPrompt() + mcpdb.ToolGuidance
 	// In threads, ChannelID is the thread ID, so the relay session stays
 	// continuous after auto-thread creation.
-	reply := persona.Postprocess(b.Relay.ChatWithTools(ctx, system, q, history, m.ChannelID, mcpdb.ToolDefs(), b.Tools.Execute), false)
+	reply := persona.Postprocess(b.Relay.ChatWithTools(ctx, system, q, history, m.ChannelID, mcpdb.ToolDefs(), b.Tools.Execute), greeting)
 	reply = cutRunes(reply, 2000)
 	_, _ = s.ChannelMessageSendReply(m.ChannelID, reply, m.Reference())
 }
