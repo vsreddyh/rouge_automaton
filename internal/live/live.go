@@ -80,7 +80,10 @@ func num(m map[string]any, key string) float64 {
 	return 0
 }
 
-// PlanetLine returns "Name: owner pct% — N divers. Over." for an exact name.
+// PlanetLine returns "Name: owner pct% — N divers." for an exact name,
+// appending "DEFENSE vs <faction>: <repelled>% repelled, ends <date>."
+// while an attack event is live. Without an event it ends at "divers.".
+// Every return ends with "Over." so the model can quote it verbatim.
 func (c *Client) PlanetLine(ctx context.Context, name string) string {
 	for _, p := range c.planets(ctx) {
 		n, _ := p["name"].(string)
@@ -93,7 +96,26 @@ func (c *Client) PlanetLine(ctx context.Context, name string) string {
 		if max > 0 {
 			pct = 100 * (1 - health/max)
 		}
-		return fmt.Sprintf("%s: %s %.1f%% — %.0f divers. Over.", n, owner, pct, num(p, "players"))
+		line := fmt.Sprintf("%s: %s %.1f%% — %.0f divers.", n, owner, pct, num(p, "players"))
+		if ev, ok := p["event"].(map[string]any); ok && ev != nil {
+			faction, _ := ev["faction"].(string)
+			emax, ehealth := num(ev, "maxHealth"), num(ev, "health")
+			if faction != "" && emax > 0 {
+				kind := "campaign"
+				if num(ev, "eventType") == 1 {
+					kind = "DEFENSE"
+				}
+				end := ""
+				if es, _ := ev["endTime"].(string); es != "" {
+					if t, err := time.Parse(time.RFC3339, es); err == nil {
+						end = ", ends " + t.Format("Jan 2")
+					}
+				}
+				repelled := 100 * (1 - ehealth/emax)
+				line += fmt.Sprintf(" %s vs %s: %.1f%% repelled%s.", kind, faction, repelled, end)
+			}
+		}
+		return line + " Over."
 	}
 	return ""
 }

@@ -26,6 +26,22 @@ func TestPlanetLine(t *testing.T) {
 	}
 }
 
+func TestPlanetLineDefenseEvent(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`[{"name":"FURY","currentOwner":"Humans","health":2000000,"maxHealth":2000000,` +
+			`"players":null,"event":{"eventType":1,"faction":"Automaton",` +
+			`"health":1336106,"maxHealth":1500000,"endTime":"2026-09-20T13:00:56Z"}}]`))
+	}))
+	defer srv.Close()
+	c := &Client{Base: srv.URL, Contact: "t", Client: "t", HTTP: srv.Client()}
+	got := c.PlanetLine(context.Background(), "fury")
+	for _, want := range []string{"FURY: Humans 0.0%", "DEFENSE vs Automaton", "10.9% repelled", "ends Sep 20", "Over."} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("want %q in %q", want, got)
+		}
+	}
+}
+
 func TestCacheSurvivesOutage(t *testing.T) {
 	calls := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
