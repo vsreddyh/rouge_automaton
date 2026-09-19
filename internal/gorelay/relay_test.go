@@ -163,9 +163,10 @@ func TestChatWithToolsNoCall(t *testing.T) {
 	}
 }
 
-// TestChatWithToolsAckNudge replays the Fury incident: round 1 narrates a
-// lookup with no function call, so the loop must nudge once and complete
-// the tool round instead of posting the ack.
+// TestChatWithToolsAckNudge replays the Fury incidents verbatim: round 1
+// acks with no function call, so the loop must nudge once and complete
+// the tool round instead of posting the ack. No reply wording is
+// inspected — any call-free first round gets the same treatment.
 func TestChatWithToolsAckNudge(t *testing.T) {
 	var bodies []string
 	round := 0
@@ -175,7 +176,7 @@ func TestChatWithToolsAckNudge(t *testing.T) {
 		round++
 		switch round {
 		case 1:
-			w.Write([]byte(`{"output":[{"type":"message","content":[{"type":"output_text","text":"Checking Fury's war status. Over."}]}]}`))
+			w.Write([]byte(`{"output":[{"type":"message","content":[{"type":"output_text","text":"Helldiver, standing by — pulling current war-status. Over."}]}]}`))
 		case 2:
 			w.Write([]byte(`{"output":[{"type":"function_call","call_id":"call_1","name":"planet_status","arguments":"{\"name\":\"FURY\"}"}]}`))
 		default:
@@ -200,32 +201,61 @@ func TestChatWithToolsAckNudge(t *testing.T) {
 	if execCalls != 1 || len(bodies) != 3 {
 		t.Fatalf("exec=%d rounds=%d, want 1/3", execCalls, len(bodies))
 	}
-	if !strings.Contains(bodies[1], "Checking Fury") || !strings.Contains(bodies[1], "function_call") {
+	if !strings.Contains(bodies[1], "standing by") || !strings.Contains(bodies[1], "function_call") {
 		t.Fatalf("round 2 must carry ack + nudge, got %s", bodies[1][:200])
 	}
 }
 
-func TestIsLookupAck(t *testing.T) {
-	for _, s := range []string{
-		"Checking Fury's war status. Over.",
-		"Looking up Hulk intel. Over.",
-		"Searching the archives for railgun data. Over.",
-	} {
-		if !isLookupAck(s) {
-			t.Errorf("want ack: %q", s)
+// TestChatWithToolsMemoryAnswer covers the sibling failure: the model
+// answers a factual query from memory with no call at all (no ack
+// phrasing). The query-side trigger must still nudge it to the tools.
+func TestChatWithToolsMemoryAnswer(t *testing.T) {
+	round := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		round++
+		switch round {
+		case 1:
+			w.Write([]byte(`{"output":[{"type":"message","content":[{"type":"output_text","text":"FURY is held by Humans. Over."}]}]}`))
+		case 2:
+			w.Write([]byte(`{"output":[{"type":"function_call","call_id":"call_1","name":"planet_status","arguments":"{\"name\":\"FURY\"}"}]}`))
+		default:
+			w.Write([]byte(`{"output":[{"type":"message","content":[{"type":"output_text","text":"FURY: Humans 0.0% — 0 divers. Over."}]}]}`))
 		}
+	}))
+	defer srv.Close()
+	c := &Client{BaseURL: srv.URL, HTTP: srv.Client()}
+	execCalls := 0
+	got := c.ChatWithTools(context.Background(), "", "What is the status on fury", nil, "s",
+		[]ToolDef{{Name: "planet_status"}},
+		func(ctx context.Context, name, args string) string {
+			execCalls++
+			return "FURY: Humans 0.0% — 0 divers. Over."
+		})
+	if got != "FURY: Humans 0.0% — 0 divers. Over." {
+		t.Fatalf("memory answer must be nudged into a tool round, got %q", got)
 	}
-	for _, s := range []string{
-		"Hi. Over.",
-		"Checking in, diver. Over.",
-		"Hulk. Rear vent. Over.",
-		"FURY: Humans 0.0% — 0 divers. Over.",
-		Dead,
-		"The Lost Son is busy spreading democracy on Cyberstan. Hold position, Helldiver — try again shortly. Estimated time of liberation: 7s.",
-	} {
-		if isLookupAck(s) {
-			t.Errorf("must not nudge: %q", s)
-		}
+	if execCalls != 1 || round != 3 {
+		t.Fatalf("exec=%d rounds=%d, want 1/3", execCalls, round)
+	}
+}
+
+// TestChatWithToolsGreetingNudge documents the nudge cost: small talk
+// with tools on the wire resolves in two rounds (nudge, then the answer
+// stands), never calls a tool.
+func TestChatWithToolsGreetingNudge(t *testing.T) {
+	rounds := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rounds++
+		w.Write([]byte(`{"output":[{"type":"message","content":[{"type":"output_text","text":"Helldiver. Copy. State business. Over."}]}]}`))
+	}))
+	defer srv.Close()
+	c := &Client{BaseURL: srv.URL, HTTP: srv.Client()}
+	called := false
+	got := c.ChatWithTools(context.Background(), "", "hello", nil, "s",
+		[]ToolDef{{Name: "planet_status"}},
+		func(ctx context.Context, name, args string) string { called = true; return "" })
+	if got != "Helldiver. Copy. State business. Over." || called || rounds != 2 {
+		t.Fatalf("greeting must stand after one nudge: %q called=%v rounds=%d", got, called, rounds)
 	}
 }
 

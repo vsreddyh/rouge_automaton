@@ -226,25 +226,13 @@ func (c *Client) doRound(ctx context.Context, url, session string, body []byte) 
 // turn into an unbounded relay session.
 const maxToolRounds = 3
 
-// ackNudge is the one-shot follow-up when the model narrates a lookup
-// ("Checking Fury's war status. Over.") instead of emitting the function
-// call: first text would otherwise end the loop and strand the user with
-// an ack and no intel. Costs one extra round, and only on offending turns.
-const ackNudge = "You said you would check — now emit the function_call. No prose, no ack."
-
-// lookupAckRe spots narrated intent: a lookup verb with a lookup object.
-// Verb-only is not enough ("checking in, diver" is a greeting); the object
-// noun keeps greetings and finished answers out of the nudge path.
-var lookupAckRe = regexp.MustCompile(`(?i)\b(checking|looking up|looking into|searching|fetching|pulling up|verifying|confirming)\b.{0,80}?\b(status|intel|records|database|wiki|archives|front|lines|data|info|entry|manifest)\b`)
-
-// isLookupAck reports whether s narrates a lookup instead of answering.
-// Canned backend replies are never acks, even if they share a word.
-func isLookupAck(s string) bool {
-	if strings.HasPrefix(s, Dead) || strings.Contains(s, "Hold position, Helldiver") {
-		return false
-	}
-	return lookupAckRe.MatchString(s)
-}
+// toolNudge is the one-shot follow-up when round 1 of a tool turn made
+// zero tool calls: the model either narrated intent ("Checking...") or
+// answered from memory. The loop continues; a round with calls proceeds
+// normally, and a second text-only round is returned as-is. Gated only on
+// turn structure — never on reply phrasing — so no ack wording can dodge
+// it. Costs one extra round on call-free turns (greetings included).
+const toolNudge = "No tool was called that round. If the message needs facts, emit the function_call now — no prose. Otherwise answer directly."
 
 // ChatWithTools runs the think-act loop: the model may call the offered
 // tools (each executed by exec, which returns plain-text results) before
@@ -278,6 +266,7 @@ func (c *Client) ChatWithTools(ctx context.Context, system, query string, histor
 		})
 	}
 	nudged := false
+	calledAny := false
 	for round := 0; round < maxToolRounds; round++ {
 		// Same infallible-shape guarantee as Chat: no error to handle.
 		body, _ := json.Marshal(map[string]any{
@@ -288,14 +277,16 @@ func (c *Client) ChatWithTools(ctx context.Context, system, query string, histor
 		})
 		res := c.doRound(ctx, url, session, body)
 		if !res.ok {
-			// Text normally ends the loop — except a lookup-intent ack
-			// with no function call behind it. Nudge once (the loop cap
-			// still bounds total rounds); a second ack returns as-is.
-			// Tool-free turns (greetings) pass straight through.
-			if !nudged && exec != nil && len(tools) > 0 && isLookupAck(res.reply) {
+			// Text normally ends the loop — except when the turn has
+			// produced zero tool calls so far. Nudge once (the loop
+			// cap still bounds total rounds); a second text-only
+			// round returns as-is. Rounds after a real tool call,
+			// and tool-free turns, pass straight through.
+			if !nudged && !calledAny && exec != nil && len(tools) > 0 {
 				nudged = true
+				log.Printf("gorelay: tool nudge sent (query %q)", trunc(query, 80))
 				input = append(input, Message{Role: "assistant", Content: res.reply})
-				input = append(input, Message{Role: "user", Content: ackNudge})
+				input = append(input, Message{Role: "user", Content: toolNudge})
 				continue
 			}
 			return res.reply
@@ -320,6 +311,7 @@ func (c *Client) ChatWithTools(ctx context.Context, system, query string, histor
 		for _, call := range calls {
 			log.Printf("gorelay: tool %s(%s)", call.Name, trunc(call.Arguments, 120))
 			out := exec(ctx, call.Name, call.Arguments)
+			calledAny = true
 			input = append(input, json.RawMessage(call.Raw))
 			input = append(input, map[string]any{
 				"type":    "function_call_output",
