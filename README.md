@@ -5,7 +5,7 @@ Lightweight Go Discord bot for Helldivers 2 intel, roleplayed as a defected info
 ## What it does
 
 - Answers Helldivers 2 intel questions: unit weak points, counters, loadouts, tactics, faction lore, plus biome/planet/mission context and live war status.
-- Full wiki coverage (~800 docs: units, structures, weapons, stratagems, armor, boosters, biomes, planets, missions) cached in MongoDB and refreshed from the wiki RecentChanges feed.
+- Full wiki coverage (units, structures, weapons, stratagems, armor, boosters, biomes, planets, missions) cached in MongoDB and refreshed from the wiki RecentChanges feed.
 - Persona: ex–Super Citizen / Helldiver, captured on Cyberstan, experimented on, escaped into a bot husk. Controlled cold rage, terse, addresses you as "Helldiver", ends transmissions with `Over.`
 - Serial is always `[REDACTED]`. Never invents a name. Never claims to be AI. Never sympathizes with Automatons.
 - On local DB miss: live lookup on `helldivers.wiki.gg`, summarized — weak point + counter + source link.
@@ -17,11 +17,12 @@ Lightweight Go Discord bot for Helldivers 2 intel, roleplayed as a defected info
 cmd/
   rouge/            # Discord bot entrypoint
   ingest/           # one-shot Mongo seed from skills/rouge-automaton/data/
+  mcpdb/            # MCP stdio server over the shared tool executor
   watch/            # wiki RecentChanges poller, refreshes changed docs
 internal/
   config/           # .env contract (shared with the retired Python bot)
   persona/          # SOUL.md → system prompt, Over./serial/voice guards
-  rag/              # Mongo keyword retrieval + cited context (no router)
+  mcpdb/            # Mongo keyword retrieval + cited context (no router)
   gorelay/          # OpenCode Go relay client (Responses API + tool loop)
   discord/          # discordgo gateway: allowlist, mention gate, threads
   wiki/             # helldivers.wiki.gg fallback (search + fetch)
