@@ -65,14 +65,15 @@ func IsIdentityQuestion(q string) bool {
 
 var (
 	// overRe anchors the war-radio sign-off to the very end of the reply.
-	// Case-insensitive on a word boundary: a lowercase "over." counts, but
-	// "layover."/"moreover." must not (the (?:^|\s) guard keeps them out).
-	overRe = regexp.MustCompile(`(?i)(?:^|\s)over\.\s*$`)
+	// Case-insensitive with a word boundary: lowercase "over." and
+	// punctuation-joined "Hello.Over." both count, while
+	// "layover."/"moreover." have no boundary inside and never match.
+	overRe = regexp.MustCompile(`(?i)\bover\.\s*$`)
 	// serialRe catches any attempt to print a numeric serial ("serial 12345",
 	// "serial: #7", "serial-number 12345") so it can be forced back to the
 	// canon placeholder. An optional "number" bridges word-gap forms; the
 	// backstop errs toward redaction.
-	serialRe = regexp.MustCompile(`(?i)serial[\s#\-]*(number[\s#\-]*)?\d+`)
+	serialRe = regexp.MustCompile(`(?i)serial[:\s#\-]*(number[:\s#\-]*)?\d+`)
 )
 
 // soul returns the raw SOUL.md canon. A valid SKILLS_DIR override wins so
