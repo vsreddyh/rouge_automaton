@@ -23,6 +23,15 @@ func TestPostprocess(t *testing.T) {
 	if got := Postprocess("Hulk. Rear vent."); got != "Hulk. Rear vent. Over." {
 		t.Fatalf("period join wrong: %q", got)
 	}
+	if got := Postprocess(""); got != "Over." {
+		t.Fatalf("empty reply must be bare sign-off: %q", got)
+	}
+	if got := Postprocess("Standing over."); got != "Standing over." {
+		t.Fatalf("lowercase sign-off must not duplicate: %q", got)
+	}
+	if got := Postprocess("Flying the layover."); got != "Flying the layover. Over." {
+		t.Fatalf("layover must not read as sign-off: %q", got)
+	}
 }
 
 func TestSystemPrompt(t *testing.T) {

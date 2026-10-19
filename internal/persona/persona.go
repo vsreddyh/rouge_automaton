@@ -65,7 +65,9 @@ func IsIdentityQuestion(q string) bool {
 
 var (
 	// overRe anchors the war-radio sign-off to the very end of the reply.
-	overRe = regexp.MustCompile(`Over\.\s*$`)
+	// Case-insensitive on a word boundary: a lowercase "over." counts, but
+	// "layover."/"moreover." must not (the (?:^|\s) guard keeps them out).
+	overRe = regexp.MustCompile(`(?i)(?:^|\s)over\.\s*$`)
 	// serialRe catches any attempt to print a numeric serial ("serial 12345",
 	// "serial: #7") so it can be forced back to the canon placeholder.
 	serialRe = regexp.MustCompile(`(?i)serial[:\s#]*\d+`)
@@ -114,6 +116,9 @@ func PromptFor(q string) string {
 // first on every path. Replies gain the trailing "Over." beat unless already
 // present, dangling punctuation trimmed first.
 func Postprocess(reply string) string {
+	if strings.TrimSpace(reply) == "" {
+		return "Over."
+	}
 	reply = serialRe.ReplaceAllString(strings.TrimSpace(reply), "serial [REDACTED]")
 	if !overRe.MatchString(reply) {
 		// Append the sign-off without mangling terminal punctuation we did
