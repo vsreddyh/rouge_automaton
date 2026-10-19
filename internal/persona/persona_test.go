@@ -192,6 +192,10 @@ func TestSanitize(t *testing.T) {
 	if got := Postprocess("Rear vent. Source: mongo"); got != "Rear vent. Source: mongo. Over." {
 		t.Fatalf("trailing source needs its period: %q", got)
 	}
+	// Middle Source lines gain periods too when a second blob appends.
+	if got := Postprocess("Rear vent. Source: mongodb [source: mongo]"); got != "Rear vent. Source: mongodb.\nSource: mongo. Over." {
+		t.Fatalf("middle source needs its period: %q", got)
+	}
 	clean := "Hulk. Rear vent AMR."
 	if got := Sanitize(clean); got != clean {
 		t.Fatalf("clean text must pass through: %q", got)

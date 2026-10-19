@@ -174,12 +174,18 @@ func Sanitize(reply string) string {
 			s = strings.TrimSpace(s) + "\nSource: " + first + "."
 		}
 	}
-	// A pre-existing trailing Source line without its period gets one, so
-	// the sign-off below lands on its own beat ("Source: mongo Over." is
-	// never emitted).
-	if loc := trailingSourceRe.FindStringIndex(s); loc != nil {
-		s = s[:loc[0]] + s[loc[0]:loc[1]] + "."
+	// Every human Source line gets its period — middle lines as well as the
+	// tail — so the sign-off below never glues onto a source. Capital-S
+	// only: tool blobs are lowercase and already stripped above, so matches
+	// are human-written citations; lines already carrying a period pass
+	// through untouched.
+	lines := strings.Split(s, "\n")
+	for i, ln := range lines {
+		if j := strings.Index(ln, "Source:"); j >= 0 && !strings.Contains(ln[j:], ".") {
+			lines[i] = ln + "."
+		}
 	}
+	s = strings.Join(lines, "\n")
 	return strings.TrimSpace(s)
 }
 
@@ -207,11 +213,6 @@ func dupSource(s, first string) bool {
 		idx += i + 7
 	}
 }
-
-// trailingSourceRe finds a human Source line at the very end that lacks its
-// period ("... Source: mongo" → "... Source: mongo."), so Postprocess lands
-// the sign-off on a beat instead of gluing it to the source.
-var trailingSourceRe = regexp.MustCompile(`(?i)(source:\s*[^\n.]+?)\s*$`)
 
 // Postprocess enforces voice rules on a model reply. Sanitizing runs first
 // so leaked tool traces never reach the channel; serial redaction runs
