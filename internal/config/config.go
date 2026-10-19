@@ -4,6 +4,7 @@ package config
 import (
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 )
 
@@ -34,6 +35,9 @@ type Config struct {
 	AutoThread bool
 	// HD2APIBase is the community live-war API root.
 	HD2APIBase string
+	// RateLimitPerMin refills caller quota per minute; RateBurst caps it.
+	RateLimitPerMin int
+	RateBurst       int
 	// XSuperClient and XSuperContact are the headers the war API requires.
 	XSuperClient  string
 	XSuperContact string
@@ -64,6 +68,16 @@ func strSet(csv string) map[string]bool {
 	return out
 }
 
+// getenvInt reads an int env var, defaulting on unset or unparsable input.
+func getenvInt(key string, def int) int {
+	if v, ok := os.LookupEnv(key); ok {
+		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && n > 0 {
+			return n
+		}
+	}
+	return def
+}
+
 // Load reads the process environment into a Config. Secrets keep whatever
 // the environment holds (empty included); only the documented knobs above
 // carry defaults. Mention/thread behavior is intentionally hardcoded, not
@@ -81,6 +95,8 @@ func Load() Config {
 		RequireMention:       true,
 		AutoThread:           true,
 		HD2APIBase:           getenv("HD2_API_BASE", "https://api.helldivers2.dev/api/v1"),
+		RateLimitPerMin:      getenvInt("RATE_LIMIT_PER_MIN", 10),
+		RateBurst:            getenvInt("RATE_BURST", 3),
 		XSuperClient:         getenv("X_SUPER_CLIENT", "rouge-automaton"),
 		XSuperContact:        getenv("X_SUPER_CONTACT", "admin@example.com"),
 	}

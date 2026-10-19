@@ -4,6 +4,7 @@ package discord
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"strings"
 	"sync"
@@ -17,6 +18,7 @@ import (
 	"github.com/vsreddyh/rouge_automaton/internal/gorelay"
 	"github.com/vsreddyh/rouge_automaton/internal/mcpdb"
 	"github.com/vsreddyh/rouge_automaton/internal/persona"
+	"github.com/vsreddyh/rouge_automaton/internal/ratelimit"
 )
 
 // Bot holds gateway dependencies: the model client (Relay) and the tool
@@ -27,6 +29,7 @@ type Bot struct {
 	Cfg     config.Config
 	Relay   *gorelay.Client
 	Tools   *mcpdb.Executor
+	Limiter *ratelimit.Limiter
 	// threads holds live bot sessions: thread IDs the bot opened plus
 	// thread IDs it has spoken in since boot. Zero value is ready.
 	threads threadSet
@@ -71,8 +74,9 @@ func New(cfg config.Config, db *mongo.Database) (*Bot, error) {
 		discordgo.IntentsGuildMessages |
 		discordgo.IntentMessageContent
 	b := &Bot{Session: s, Cfg: cfg,
-		Relay: &gorelay.Client{BaseURL: cfg.OpenCodeGoBaseURL, APIKey: cfg.OpenCodeGoAPIKey, Model: cfg.Model},
-		Tools: mcpdb.NewExecutor(db, cfg)}
+		Relay:   &gorelay.Client{BaseURL: cfg.OpenCodeGoBaseURL, APIKey: cfg.OpenCodeGoAPIKey, Model: cfg.Model},
+		Tools:   mcpdb.NewExecutor(db, cfg),
+		Limiter: ratelimit.New(cfg.RateLimitPerMin, cfg.RateBurst, 2, nil)}
 	s.AddHandler(b.onMessage)
 	return b, nil
 }
@@ -151,6 +155,45 @@ func (b *Bot) liveSession(s *discordgo.Session, ch *discordgo.Channel) bool {
 	return false
 }
 
+// isCooldown reports whether q is a quota inquiry: /cooldown or !cooldown,
+// case-insensitive, with or without surrounding whitespace.
+func isCooldown(q string) bool {
+	s := strings.ToLower(strings.TrimSpace(q))
+	return s == "/cooldown" || s == "!cooldown"
+}
+
+// cooldownReply answers a quota inquiry in voice without burning a model
+// call: remaining whole tokens plus reset ETA, or the full-bucket line.
+func (b *Bot) cooldownReply(userID string) string {
+	rem, reset := b.Limiter.State(userID)
+	if eta := time.Until(reset).Round(time.Second); rem <= 0 || eta > time.Second {
+		if eta < time.Second {
+			eta = time.Second
+		}
+		return fmt.Sprintf("Magazine dry, Helldiver. Next resupply in %s. Over.", eta)
+	}
+	return fmt.Sprintf("Rounds to spare, Helldiver — %d left in this belt. Over.", rem)
+}
+
+// sendReply delivers text to the right channel: a fresh thread gets a plain
+// send (its starter lives in the parent), otherwise a reply. Shared by the
+// model path and the cheap command/deny paths so behavior never diverges.
+func (b *Bot) sendReply(s *discordgo.Session, m *discordgo.MessageCreate, ch *discordgo.Channel, replyChannel, reply string) {
+	if replyChannel == m.ChannelID {
+		if sent, err := s.ChannelMessageSendReply(m.ChannelID, reply, m.Reference()); err == nil && sent != nil && ch != nil && ch.IsThread() {
+			// Spoke in a thread: it is a live session from here on.
+			b.threads.add(ch.ID)
+		}
+		return
+	}
+	// A fresh thread has no message to reference yet (the starter lives in
+	// the parent), so plain-send; on failure fall back to a channel reply
+	// rather than staying silent.
+	if _, err := s.ChannelMessageSend(replyChannel, reply); err != nil {
+		_, _ = s.ChannelMessageSendReply(m.ChannelID, reply, m.Reference())
+	}
+}
+
 func (b *Bot) onMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 	if m.Author == nil || m.Author.Bot || !b.Cfg.Allowed(m.Author.ID) {
 		return
@@ -180,6 +223,21 @@ func (b *Bot) onMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 	q = strings.ReplaceAll(q, "<@!"+self+">", "")
 	q = strings.TrimSpace(q)
 	if q == "" {
+		return
+	}
+	// /cooldown is cheap and burns nothing: answer from local quota state.
+	if isCooldown(q) {
+		b.sendReply(s, m, ch, m.ChannelID, cutRunes(b.cooldownReply(m.Author.ID), 2000))
+		return
+	}
+	// Client-side guard before any model spend. Key is the caller ID so
+	// thread follow-ups share the caller bucket, not the thread bucket.
+	if ok, eta := b.Limiter.Allow(m.Author.ID, free); !ok {
+		secs := int(eta.Round(time.Second).Seconds())
+		if secs < 1 {
+			secs = 1
+		}
+		b.sendReply(s, m, ch, m.ChannelID, fmt.Sprintf(gorelay.Busy, fmt.Sprintf("%ds", secs)))
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
@@ -220,17 +278,5 @@ func (b *Bot) onMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 	// Cut before Postprocess so a >2000-rune reply never amputates the
 	// sign-off: truncation happens first, "Over." lands intact.
 	reply := persona.Postprocess(cutRunes(b.Relay.ChatWithTools(ctx, system, q, history, replyChannel, mcpdb.ToolDefs(), b.Tools.Execute), 2000))
-	if replyChannel == m.ChannelID {
-		if sent, err := s.ChannelMessageSendReply(m.ChannelID, reply, m.Reference()); err == nil && sent != nil && ch != nil && ch.IsThread() {
-			// Spoke in a thread: it is a live session from here on.
-			b.threads.add(ch.ID)
-		}
-		return
-	}
-	// A fresh thread has no message to reference yet (the starter lives in
-	// the parent), so plain-send; on failure fall back to a channel reply
-	// rather than staying silent.
-	if _, err := s.ChannelMessageSend(replyChannel, reply); err != nil {
-		_, _ = s.ChannelMessageSendReply(m.ChannelID, reply, m.Reference())
-	}
+	b.sendReply(s, m, ch, replyChannel, reply)
 }

@@ -1,6 +1,12 @@
 package discord
 
-import "testing"
+import (
+	"strings"
+	"testing"
+
+	"github.com/vsreddyh/rouge_automaton/internal/config"
+	"github.com/vsreddyh/rouge_automaton/internal/ratelimit"
+)
 
 // gatePass must admit exactly the intended matrix: open mode admits all,
 // otherwise one of mention, free channel, or live thread session is needed.
@@ -48,5 +54,31 @@ func TestCutRunes(t *testing.T) {
 	}
 	if cutRunes("hi", 5) != "hi" {
 		t.Fatal("short string must pass through")
+	}
+}
+
+func TestIsCooldown(t *testing.T) {
+	for _, q := range []string{"/cooldown", "!cooldown", "  /COOLDOWN  "} {
+		if !isCooldown(q) {
+			t.Fatalf("must detect %q", q)
+		}
+	}
+	if isCooldown("cooldown") || isCooldown("/status") || isCooldown("") {
+		t.Fatal("must not overmatch")
+	}
+}
+
+func TestCooldownReplyInVoice(t *testing.T) {
+	b := &Bot{Cfg: config.Load(), Limiter: ratelimit.New(10, 3, 2, nil)}
+	got := b.cooldownReply("u-cool")
+	if !strings.HasSuffix(got, "Over.") || !strings.Contains(got, "Helldiver") {
+		t.Fatalf("cooldown must stay in voice: %q", got)
+	}
+	// Drain the caller, then the reply must carry the dry-magazine line.
+	for i := 0; i < 5; i++ {
+		_, _ = b.Limiter.Allow("u-cool", false)
+	}
+	if got := b.cooldownReply("u-cool"); !strings.Contains(got, "resupply") {
+		t.Fatalf("dry bucket must report resupply: %q", got)
 	}
 }
