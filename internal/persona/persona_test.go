@@ -50,12 +50,18 @@ func TestIntelPromptHasNoBackstory(t *testing.T) {
 	if !strings.Contains(got, "Helldiver") || !strings.Contains(got, "Over.") {
 		t.Fatal("intel prompt must keep voice card (Helldiver, Over.)")
 	}
+	if !strings.Contains(got, "never refuse") {
+		t.Fatal("intel prompt must keep the equal-faction never-refuse rule")
+	}
 	if c := len(strings.Fields(VoiceCard)); c >= 120 {
 		t.Fatalf("voice card must stay <120 words, got %d", c)
 	}
 	intelQs := []string{
 		"how to kill Hulk?", "best loadout vs Terminids",
 		"planet status Mintoria", "hi", "where to fight tundra",
+		// Regression: open-ended phrasing must not open the canon gate.
+		"what are you best vs hulks?", "what is my serial?",
+		"serial number of the Hulk?", "what are you supposed to use vs hulk?",
 	}
 	for _, q := range intelQs {
 		if IsIdentityQuestion(q) {
@@ -69,8 +75,8 @@ func TestIntelPromptHasNoBackstory(t *testing.T) {
 
 func TestIdentityPromptKeepsCanon(t *testing.T) {
 	for _, q := range []string{
-		"who are you?", "what is your name?", "your serial?",
-		"tell me about Brasch", "what happened to you on Cyberstan?",
+		"who are you?", "what is your name?", "your serial?", "serial?",
+		"what are you?", "tell me about Brasch", "what happened to you on Cyberstan?",
 	} {
 		if !IsIdentityQuestion(q) {
 			t.Fatalf("identity query missed: %q", q)
