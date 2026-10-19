@@ -88,10 +88,7 @@ func statusReply(p statusProber, boot time.Time, userID string, freeChannel bool
 	model, mongo := probeAll(ctx, p)
 	belt := "unknown"
 	if l != nil {
-		cost := 1.0
-		if freeChannel {
-			cost = ratelimit.DefaultFreeCost
-		}
+		cost := l.Cost(freeChannel)
 		msgs, reset := l.State(userID, cost)
 		if msgs <= 0 {
 			eta := time.Until(reset).Round(time.Second)
