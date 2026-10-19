@@ -299,12 +299,19 @@ func (b *Bot) onMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 		}
 		pctx, pcancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer pcancel()
-		reply := cutRunes(statusReply(b, b.Boot, m.Author.ID, b.Limiter, pctx), 2000)
+		reply := cutRunes(statusReply(b, b.Boot, m.Author.ID, free, b.Limiter, pctx), 2000)
 		b.statusMu.Lock()
 		if b.statusCache == nil {
 			b.statusCache = map[string]cachedStatus{}
 		}
 		b.statusCache[m.Author.ID] = cachedStatus{at: time.Now(), text: reply}
+		// Sweep stale entries on write; the cache is bounded by allowlist
+		// size in practice, this keeps idlers from lingering forever.
+		for id, c := range b.statusCache {
+			if time.Since(c.at) > statusCacheTTL {
+				delete(b.statusCache, id)
+			}
+		}
 		b.statusMu.Unlock()
 		b.sendReply(s, m, ch, m.ChannelID, reply)
 		return

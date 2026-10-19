@@ -79,7 +79,8 @@ func statusCached(cache map[string]cachedStatus, userID string, now time.Time) (
 // statusReply builds the /status answer in voice: gateway + uptime, model,
 // mongo, caller belt, watcher. One failed check degrades to "unknown",
 // never fails the whole command. Never prints secrets — no tokens, no URIs.
-func statusReply(p statusProber, boot time.Time, userID string, l *ratelimit.Limiter, ctx context.Context) string {
+// The belt counts messages at the caller's channel cost, like /cooldown.
+func statusReply(p statusProber, boot time.Time, userID string, freeChannel bool, l *ratelimit.Limiter, ctx context.Context) string {
 	up := "since boot"
 	if !boot.IsZero() {
 		up = boot.Format("Jan 2 15:04") + " (" + time.Since(boot).Round(time.Minute).String() + " ago)"
@@ -87,15 +88,19 @@ func statusReply(p statusProber, boot time.Time, userID string, l *ratelimit.Lim
 	model, mongo := probeAll(ctx, p)
 	belt := "unknown"
 	if l != nil {
-		rem, reset := l.State(userID)
-		if rem <= 0 {
+		cost := 1.0
+		if freeChannel {
+			cost = ratelimit.DefaultFreeCost
+		}
+		msgs, reset := l.State(userID, cost)
+		if msgs <= 0 {
 			eta := time.Until(reset).Round(time.Second)
 			if eta < time.Second {
 				eta = time.Second
 			}
 			belt = fmt.Sprintf("dry — resupply %s", eta)
 		} else {
-			belt = fmt.Sprintf("%d rounds spare", rem)
+			belt = fmt.Sprintf("%d rounds spare", msgs)
 		}
 	}
 	return fmt.Sprintf("Gateway hot, Helldiver. Booted %s. Model uplink: %s. Mongo: %s. Belt: %s. Watcher: unreported. Over.",

@@ -172,6 +172,9 @@ func (c *Client) doRound(ctx context.Context, url, session string, body []byte) 
 		} else if _, err := strconv.Atoi(ra); err == nil {
 			ra += "s"
 		}
+		// Drain (bounded) before returning so the connection stays reusable
+		// — this is the hottest path under throttle.
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4<<10))
 		return roundResult{reply: fmt.Sprintf(Busy, ra)}
 	}
 	// Decode items twice: typed for dispatch, raw for verbatim echo of
@@ -402,9 +405,10 @@ var numRe = regexp.MustCompile(`^[0-9]+$`)
 // kills both false positives ("retry 3 times" without throttling) and false
 // negatives (a bare 429 with no number, which gets the stand-by ETA).
 func busyOrDead(s string) string {
-	low := strings.ToLower(s)
-	if strings.Contains(low, "429") || strings.Contains(low, "rate") ||
-		strings.Contains(low, "too many requests") {
+	// probeRateLimited is the single tight matcher (429, rate limit,
+	// ratelimit, too many requests) — bare "rate" must never qualify
+	// ("separate", "desperate").
+	if probeRateLimited(strings.ToLower(s)) {
 		if m := retryRe.FindStringSubmatch(s); m != nil && numRe.MatchString(m[1]) {
 			return fmt.Sprintf(Busy, m[1]+"s")
 		}

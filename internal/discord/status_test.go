@@ -28,14 +28,14 @@ func TestIsStatus(t *testing.T) {
 func TestStatusReply(t *testing.T) {
 	ctx := context.Background()
 	l := ratelimit.New(10, 3, 2, nil)
-	got := statusReply(fakeProber{"clear", "reachable"}, time.Now().Add(-90*time.Minute), "u1", l, ctx)
+	got := statusReply(fakeProber{"clear", "reachable"}, time.Now().Add(-90*time.Minute), "u1", false, l, ctx)
 	for _, want := range []string{"Helldiver", "Over.", "clear", "reachable", "Gateway"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("status must contain %q: %q", want, got)
 		}
 	}
 	// One failed check degrades, never fails the whole command.
-	got = statusReply(fakeProber{"dead", "unknown"}, time.Time{}, "u1", l, ctx)
+	got = statusReply(fakeProber{"dead", "unknown"}, time.Time{}, "u1", false, l, ctx)
 	if !strings.Contains(got, "dead") || !strings.HasSuffix(got, "Over.") {
 		t.Fatalf("degraded status must still report: %q", got)
 	}
@@ -96,7 +96,7 @@ func TestStatusBeltPartialSpare(t *testing.T) {
 	ctx := context.Background()
 	l := ratelimit.New(10, 3, 2, nil)
 	_, _ = l.Allow("u-part", false) // 2 of 3 left: spare, not dry
-	got := statusReply(fakeProber{"clear", "reachable"}, time.Now(), "u-part", l, ctx)
+	got := statusReply(fakeProber{"clear", "reachable"}, time.Now(), "u-part", false, l, ctx)
 	if !strings.Contains(got, "spare") {
 		t.Fatalf("partial belt must read spare: %q", got)
 	}
