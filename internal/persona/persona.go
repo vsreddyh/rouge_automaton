@@ -185,7 +185,7 @@ func Sanitize(reply string) string {
 // prefix-matches "mongodb" but multi-word "Super Earth archives" still
 // folds — and no per-reply MustCompile on the hot path.
 func dupSource(s, first string) bool {
-	want := strings.ToLower(strings.Trim(first, " ."))
+	want := strings.ToLower(strings.Trim(first, " .;:()[]\"'"))
 	low := strings.ToLower(s)
 	idx := 0
 	for {

@@ -169,6 +169,10 @@ func TestSanitize(t *testing.T) {
 	if got := Postprocess("Rear vent. [SOURCE: mongo]"); strings.Contains(got, "[SOURCE:") || strings.Count(got, "Source:") != 1 {
 		t.Fatalf("uppercase source must collapse: %q", got)
 	}
+	// Quoted/semicolon sources fold against bare ones.
+	if got := Postprocess(`Rear vent. [source: "mongo"]`); strings.Count(got, "Source:") != 1 {
+		t.Fatalf("quoted source must fold: %q", got)
+	}
 	// Nested JSON clears fully; mongo must not prefix-match mongodb.
 	if got := Postprocess(`Vent. {"outer": {"inner": 1}}`); strings.Contains(got, "{") {
 		t.Fatalf("nested JSON must clear: %q", got)
