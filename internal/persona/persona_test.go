@@ -76,7 +76,8 @@ func TestIntelPromptHasNoBackstory(t *testing.T) {
 func TestIdentityPromptKeepsCanon(t *testing.T) {
 	for _, q := range []string{
 		"who are you?", "what is your name?", "your serial?", "serial?",
-		"what are you?", "tell me about Brasch", "what happened to you on Cyberstan?",
+		"what are you?", "tell me about yourself", "tell me about Brasch",
+		"what happened to you on Cyberstan?",
 	} {
 		if !IsIdentityQuestion(q) {
 			t.Fatalf("identity query missed: %q", q)

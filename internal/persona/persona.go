@@ -45,7 +45,7 @@ const containmentRule = `Never volunteer backstory unprompted. Intel answers con
 // of the Hulk?" and "what are you best vs hulks?" are intel, not identity.
 // Exact-match queries ("serial?", "what are you?") are covered by
 // identityExactRe so the acceptance fixtures still gate to canon.
-var identityRe = regexp.MustCompile(`(?i)\b(who are you|your name|your serial|brasch|john helldiver|what happened to you|your (past|story|backstory|memory))\b`)
+var identityRe = regexp.MustCompile(`(?i)\b(who are you|your name|your serial|about yourself|brasch|john helldiver|what happened to you|your (past|story|backstory|memory))\b`)
 
 // identityExactRe matches whole-query identity probes that the substring
 // gate above must not own: a lone "serial?" (acceptance fixture) without
