@@ -91,10 +91,12 @@ var (
 	jsonArgsRe = regexp.MustCompile(`\{[^{}]*"[^{}]*:[^{}]*\}`)
 	// narrateRe strips a narration line that holds nothing but the lookup
 	// ("Calling search_units now\n"): the tool token plus a short tail must
-	// reach newline or end-of-input. Same-line intel ("... now Rear vent.")
-	// never matches — narration leak beats intel loss, and ToolGuidance
-	// plus the relay ack-nudge prevent narration upstream.
-	narrateRe = regexp.MustCompile(`(?im)^\s*(calling|checking|searching|fetching|looking up)\s+(search_\w+|planet_status|wiki_search)\b[^\n.]{0,40}(?:\n|$)`)
+	// reach newline or end-of-input, allowing one terminal period. The tail
+	// cap (12) is the intel guard: narration tails ("now", "for you") are
+	// short, while same-line intel ("... now Rear vent.") overflows it and
+	// survives — narration leak beats intel loss, and ToolGuidance plus the
+	// relay ack-nudge prevent narration upstream.
+	narrateRe = regexp.MustCompile(`(?im)^\s*(calling|checking|searching|fetching|looking up)\s+(search_\w+|planet_status|wiki_search)\b[^\n.]{0,12}\.?(?:\n|$)`)
 	sourceRe  = regexp.MustCompile(`(?i)\[source:\s*([^\]]+)\]`)
 	// spaceRe/blankRe collapse whitespace left behind by the strips above.
 	// Package-level so the hot reply path never recompiles.
@@ -169,12 +171,19 @@ func Sanitize(reply string) string {
 			s = strings.TrimSpace(s) + "\nSource: " + first + "."
 		}
 	}
+	// A pre-existing trailing Source line without its period gets one, so
+	// the sign-off below lands on its own beat ("Source: mongo Over." is
+	// never emitted).
+	if loc := trailingSourceRe.FindStringIndex(s); loc != nil {
+		s = s[:loc[0]] + s[loc[0]:loc[1]] + "."
+	}
 	return strings.TrimSpace(s)
 }
 
 // dupSource reports whether s already carries a human "Source: <first>"
-// reference. Token-compared and case-folded, so "mongo" never
-// prefix-matches "mongodb" — and no per-reply MustCompile on the hot path.
+// reference. Phrase-compared and case-folded, so "mongo" never
+// prefix-matches "mongodb" but multi-word "Super Earth archives" still
+// folds — and no per-reply MustCompile on the hot path.
 func dupSource(s, first string) bool {
 	want := strings.ToLower(strings.Trim(first, " ."))
 	low := strings.ToLower(s)
@@ -185,15 +194,20 @@ func dupSource(s, first string) bool {
 			return false
 		}
 		rest := strings.TrimSpace(low[idx+i+7:])
-		if j := strings.IndexAny(rest, " \t\n.,;:()[]\"'"); j >= 0 {
-			rest = rest[:j]
-		}
-		if rest == want {
-			return true
+		if strings.HasPrefix(rest, want) {
+			if tail := rest[len(want):]; tail == "" ||
+				strings.ContainsRune(" \t\n.,;:()[]\"'", rune(tail[0])) {
+				return true
+			}
 		}
 		idx += i + 7
 	}
 }
+
+// trailingSourceRe finds a human Source line at the very end that lacks its
+// period ("... Source: mongo" → "... Source: mongo."), so Postprocess lands
+// the sign-off on a beat instead of gluing it to the source.
+var trailingSourceRe = regexp.MustCompile(`(?i)(source:\s*[^\n.]+?)\s*$`)
 
 // Postprocess enforces voice rules on a model reply. Sanitizing runs first
 // so leaked tool traces never reach the channel; serial redaction runs

@@ -124,6 +124,7 @@ func TestSanitize(t *testing.T) {
 		{"json new keys", `Held. {"planet":"X","top_k":2}`, []string{"top_k", "{"}, []string{"Held"}},
 		{"prose braces kept", `Vent {front} exposed.`, []string{}, []string{"{front}"}},
 		{"narration", "Calling search_units now\nRear vent.", []string{"Calling search_units", "Calling now"}, []string{"Rear vent"}},
+		{"narration period", "Calling search_units now.\nRear vent.", []string{"Calling now"}, []string{"Rear vent"}},
 		{"narration sameline kept", "Calling search_units now Rear vent.", []string{}, []string{"Rear vent"}},
 		{"call bare id", "call_id Rear vent.", []string{"call_id Rear"}, []string{"Rear vent"}},
 		{"function direct id", "function_call abc123 Rear vent.", []string{"function_call", "abc123"}, []string{"Rear vent"}},
@@ -174,6 +175,14 @@ func TestSanitize(t *testing.T) {
 	}
 	if got := Postprocess("Rear vent. Source: mongodb [source: mongo]"); !strings.Contains(got, "Source: mongodb") || !strings.Contains(got, "Source: mongo") {
 		t.Fatalf("mongo must not shadow mongodb: %q", got)
+	}
+	// Multi-word sources fold as one phrase, not one token.
+	if got := Postprocess("Rear vent. Source: Super Earth archives [source: Super Earth archives]"); strings.Count(got, "Source:") != 1 {
+		t.Fatalf("multi-word source must not duplicate: %q", got)
+	}
+	// A trailing sourceless Source line gains its period before sign-off.
+	if got := Postprocess("Rear vent. Source: mongo"); got != "Rear vent. Source: mongo. Over." {
+		t.Fatalf("trailing source needs its period: %q", got)
 	}
 	clean := "Hulk. Rear vent AMR."
 	if got := Sanitize(clean); got != clean {
