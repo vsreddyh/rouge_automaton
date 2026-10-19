@@ -74,6 +74,13 @@ var (
 	// canon placeholder. An optional "number" bridges word-gap forms; the
 	// backstop errs toward redaction.
 	serialRe = regexp.MustCompile(`(?i)serial[:\s#\-]*(number[:\s#\-]*)?\d+`)
+	// toolCallRe strips leaked tool-loop artifacts: search_units(...),
+	// planet_status, function_call/call_id markers, and JSON arg blobs.
+	toolCallRe = regexp.MustCompile(`(?i)\b(search_units|search_gear|search_world|planet_status|wiki_search)\s*\([^)]*\)`)
+	funcMarkRe = regexp.MustCompile(`(?i)\b(function_call|function call|call_id|call id)\b[^.\n]*`)
+	jsonArgsRe = regexp.MustCompile(`\{[^{}]*"(query|name|faction|k)"[^{}]*\}`)
+	narrateRe  = regexp.MustCompile(`(?im)^\s*(calling|checking|searching|fetching|looking up)\s+(search_\w+|planet_status|wiki_search|the (database|wiki|archives)).{0,120}\n?`)
+	sourceRe   = regexp.MustCompile(`\[source:\s*([^\]]+)\]`)
 )
 
 // soul returns the raw SOUL.md canon. A valid SKILLS_DIR override wins so
@@ -115,13 +122,39 @@ func PromptFor(q string) string {
 	return IntelSystemPrompt()
 }
 
-// Postprocess enforces voice rules on a model reply. Serial redaction runs
-// first on every path. Replies gain the trailing "Over." beat unless already
+// Sanitize strips tool-loop artifacts from user-visible text: tool names
+// with args, function_call/call_id markers, JSON arg blobs, narrated
+// lookups, and duplicate [source:] blobs (first kept as "Source: x").
+// Model-facing context and gorelay logs are untouched — this runs only on
+// the final reply path. Idempotent: clean text passes through unchanged.
+func Sanitize(reply string) string {
+	s := toolCallRe.ReplaceAllString(reply, "")
+	s = funcMarkRe.ReplaceAllString(s, "")
+	s = jsonArgsRe.ReplaceAllString(s, "")
+	s = narrateRe.ReplaceAllString(s, "")
+	srcs := sourceRe.FindAllStringSubmatch(s, -1)
+	s = sourceRe.ReplaceAllString(s, "")
+	s = regexp.MustCompile(`[ \t]{2,}`).ReplaceAllString(s, " ")
+	s = regexp.MustCompile(`\n{3,}`).ReplaceAllString(s, "\n\n")
+	s = strings.TrimSpace(s)
+	if len(srcs) > 0 {
+		first := strings.TrimSpace(srcs[0][1])
+		// Drop a pre-existing human Source line only if it duplicates the
+		// kept blob; otherwise keep both (model may cite mongo + wiki).
+		s = strings.TrimSpace(s) + "\nSource: " + first
+	}
+	return strings.TrimSpace(regexp.MustCompile(`\n\s*\n\s*\n`).ReplaceAllString(s, "\n\n"))
+}
+
+// Postprocess enforces voice rules on a model reply. Sanitizing runs first
+// so leaked tool traces never reach the channel; serial redaction runs
+// next on every path. Replies gain the trailing "Over." beat unless already
 // present, dangling punctuation trimmed first.
 func Postprocess(reply string) string {
 	if strings.TrimSpace(reply) == "" {
 		return "Over."
 	}
+	reply = Sanitize(reply)
 	reply = serialRe.ReplaceAllString(strings.TrimSpace(reply), "serial [REDACTED]")
 	if !overRe.MatchString(reply) {
 		// Append the sign-off without mangling terminal punctuation we did

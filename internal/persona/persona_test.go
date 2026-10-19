@@ -106,3 +106,43 @@ func TestIdentityPromptKeepsCanon(t *testing.T) {
 		t.Fatal("empty query must gate to intel")
 	}
 }
+
+func TestSanitize(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		bad  []string
+	}{
+		{"tool call", "Hulk. search_units(Hulk) Rear vent.", []string{"search_units("}},
+		{"call id", "function_call call_id abc123 Rear vent.", []string{"function_call", "call_id", "abc123"}},
+		{"json args", `Rear vent. {"query":"Hulk","k":3}`, []string{`"query"`}},
+		{"narration", "Calling search_units now\nRear vent.", []string{"Calling search_units"}},
+		{"planet fn", "planet_status(Mintoria) says held.", []string{"planet_status("}},
+	}
+	for _, c := range cases {
+		got := Postprocess(c.in)
+		for _, b := range c.bad {
+			if strings.Contains(got, b) {
+				t.Fatalf("%s: leak %q in %q", c.name, b, got)
+			}
+		}
+		if !strings.HasSuffix(got, "Over.") {
+			t.Fatalf("%s: missing sign-off: %q", c.name, got)
+		}
+	}
+	dup := "Rear vent. [source: mongo] More. [source: wiki/Hulk]"
+	got := Postprocess(dup)
+	if c := strings.Count(got, "[source:"); c != 0 {
+		t.Fatalf("raw source blobs must collapse, got %q", got)
+	}
+	if c := strings.Count(got, "Source:"); c != 1 {
+		t.Fatalf("exactly one human Source line wanted, got %q", got)
+	}
+	if !strings.Contains(got, "Rear vent.") {
+		t.Fatalf("intel body must survive sanitize: %q", got)
+	}
+	clean := "Hulk. Rear vent AMR."
+	if got := Sanitize(clean); got != clean {
+		t.Fatalf("clean text must pass through: %q", got)
+	}
+}
