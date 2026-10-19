@@ -211,7 +211,9 @@ func (b *Bot) sendReply(s *discordgo.Session, m *discordgo.MessageCreate, ch *di
 	// rather than staying silent.
 	if _, err := s.ChannelMessageSend(replyChannel, reply); err != nil {
 		log.Printf("discord: thread send failed in %s: %v", replyChannel, err)
-		_, _ = s.ChannelMessageSendReply(m.ChannelID, reply, m.Reference())
+		if _, err := s.ChannelMessageSendReply(m.ChannelID, reply, m.Reference()); err != nil {
+			log.Printf("discord: fallback reply failed in %s: %v", m.ChannelID, err)
+		}
 	}
 }
 
