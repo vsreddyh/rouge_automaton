@@ -65,6 +65,27 @@ func (l *Limiter) refill(b *bucket, rate, max float64, t time.Time) {
 	}
 }
 
+// sweepIdle drops caller buckets untouched for over 30 minutes. Called
+// from Allow only once the map grows past sweepTrigger entries, so the
+// steady-state cost is one length check per message.
+const sweepTrigger = 1000
+const sweepIdleAfter = 30 * time.Minute
+
+func (l *Limiter) sweep(t time.Time) {
+	for k, b := range l.users {
+		if t.Sub(b.last) > sweepIdleAfter {
+			delete(l.users, k)
+		}
+	}
+}
+
+// usersLen reports tracked caller count. Test seam for the sweep.
+func (l *Limiter) usersLen() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return len(l.users)
+}
+
 // Allow consumes cost tokens (1 normal, freeCost for free channels) from the
 // caller's bucket and the global bucket. Thread follow-ups share the caller
 // bucket: key must be the author ID, never the thread ID. Returns ok and the
@@ -78,6 +99,9 @@ func (l *Limiter) Allow(key string, freeChannel bool) (ok bool, retryAfter time.
 	defer l.mu.Unlock()
 	t := l.now()
 	l.refill(l.global, l.perMin*4, l.perMin*4, t)
+	if len(l.users) > sweepTrigger {
+		l.sweep(t)
+	}
 	b, ok := l.users[key]
 	if !ok {
 		b = &bucket{tokens: l.burst, last: t}
@@ -108,19 +132,47 @@ func (l *Limiter) Allow(key string, freeChannel bool) (ok bool, retryAfter time.
 	return false, retryAfter.Round(time.Second)
 }
 
-// State reports remaining whole tokens and reset time for /cooldown.
+// State reports remaining whole cost-1 tokens — the scarcer of the caller
+// and global buckets, so a globally-throttled caller never sees "spare" —
+// plus the time the next token arrives. reset is now when a token is
+// already affordable: callers must gate dryness on remaining<=0, never on
+// the ETA (which used to be time-to-full and lied while partially spent).
 func (l *Limiter) State(key string) (remaining int, reset time.Time) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	t := l.now()
+	l.refill(l.global, l.perMin*4, l.perMin*4, t)
 	b, ok := l.users[key]
 	if !ok {
-		return int(l.burst), t
+		if l.global.tokens >= 1 {
+			return int(l.burst), t
+		}
+		return 0, l.nextToken(t, l.global.tokens, l.perMin*4)
 	}
 	l.refill(b, l.perMin, l.burst, t)
-	if b.tokens < 0 {
-		b.tokens = 0
+	rem := b.tokens
+	rate := l.perMin
+	tok := b.tokens
+	if l.global.tokens < rem {
+		rem = l.global.tokens
+		rate = l.perMin * 4
+		tok = l.global.tokens
 	}
-	fullIn := time.Duration((l.burst - b.tokens) / l.perMin * float64(time.Minute))
-	return int(b.tokens), t.Add(fullIn)
+	if rem < 0 {
+		rem = 0
+	}
+	if rem >= 1 {
+		return int(rem), t
+	}
+	return 0, l.nextToken(t, tok, rate)
+}
+
+// nextToken returns when one token accrues from tok at rate/min, floored at
+// a one-second ETA so replies never print "0s".
+func (l *Limiter) nextToken(t time.Time, tok, rate float64) time.Time {
+	next := t.Add(time.Duration((1 - tok) / rate * float64(time.Minute)))
+	if next.Sub(t) < time.Second {
+		next = t.Add(time.Second)
+	}
+	return next
 }

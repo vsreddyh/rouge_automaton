@@ -163,10 +163,17 @@ func isCooldown(q string) bool {
 }
 
 // cooldownReply answers a quota inquiry in voice without burning a model
-// call: remaining whole tokens plus reset ETA, or the full-bucket line.
+// call: remaining whole tokens, or the next-token ETA when dry. Dryness
+// gates on remaining<=0 only — Limiter.State's reset is time-to-next-token,
+// so a partially-spent belt still reads "spare". A missing limiter reads
+// full rather than panicking.
 func (b *Bot) cooldownReply(userID string) string {
+	if b.Limiter == nil {
+		return "Rounds to spare, Helldiver — belt reads full. Over."
+	}
 	rem, reset := b.Limiter.State(userID)
-	if eta := time.Until(reset).Round(time.Second); rem <= 0 || eta > time.Second {
+	if rem <= 0 {
+		eta := time.Until(reset).Round(time.Second)
 		if eta < time.Second {
 			eta = time.Second
 		}
@@ -232,13 +239,16 @@ func (b *Bot) onMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 	}
 	// Client-side guard before any model spend. Key is the caller ID so
 	// thread follow-ups share the caller bucket, not the thread bucket.
-	if ok, eta := b.Limiter.Allow(m.Author.ID, free); !ok {
-		secs := int(eta.Round(time.Second).Seconds())
-		if secs < 1 {
-			secs = 1
+	// A nil limiter (Bot not built via New) fails open, never panics.
+	if b.Limiter != nil {
+		if ok, eta := b.Limiter.Allow(m.Author.ID, free); !ok {
+			secs := int(eta.Round(time.Second).Seconds())
+			if secs < 1 {
+				secs = 1
+			}
+			b.sendReply(s, m, ch, m.ChannelID, fmt.Sprintf(gorelay.Busy, fmt.Sprintf("%ds", secs)))
+			return
 		}
-		b.sendReply(s, m, ch, m.ChannelID, fmt.Sprintf(gorelay.Busy, fmt.Sprintf("%ds", secs)))
-		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()

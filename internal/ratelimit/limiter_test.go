@@ -1,6 +1,7 @@
 package ratelimit
 
 import (
+	"fmt"
 	"testing"
 	"time"
 )
@@ -30,17 +31,18 @@ func TestBurstAndRefill(t *testing.T) {
 
 func TestGlobalVsPerUser(t *testing.T) {
 	clk, _ := testClock()
-	l := New(6000, 6000, 2, clk)
-	// Drain global with many users: per-user buckets are deep, global is 4x.
+	l := New(60, 6000, 2, clk)
+	// Distinct keys per iteration so per-user buckets never bind: only the
+	// shared global bucket (4x rate = 240/min) can deny.
 	denied := false
-	for i := 0; i < 25000; i++ {
-		if ok, _ := l.Allow("user", false); !ok {
+	for i := 0; i < 300; i++ {
+		if ok, _ := l.Allow(fmt.Sprintf("user-%d", i), false); !ok {
 			denied = true
 			break
 		}
 	}
 	if !denied {
-		t.Fatal("global bucket must eventually deny a single heavy user")
+		t.Fatal("global bucket must eventually deny across many users")
 	}
 	// Fresh user is also gated once global is dry.
 	clk2, _ := testClock()
@@ -65,16 +67,57 @@ func TestFreeChannelTighter(t *testing.T) {
 func TestState(t *testing.T) {
 	clk, tp := testClock()
 	l := New(60, 2, 2, clk)
-	rem, _ := l.State("new")
+	rem, reset := l.State("new")
 	if rem != 2 {
 		t.Fatalf("fresh state = burst, got %d", rem)
 	}
+	if reset.After(*tp) {
+		t.Fatalf("fresh reset must be now (token affordable), got %v", reset)
+	}
 	_, _ = l.Allow("new", false)
-	rem, reset := l.State("new")
+	// Partially spent: still spare, reset stays now — dryness gates on
+	// remaining<=0, never on the ETA (regression: time-to-full lied here).
+	rem, reset = l.State("new")
 	if rem != 1 {
 		t.Fatalf("after one call remaining=1, got %d", rem)
 	}
+	if reset.After(*tp) {
+		t.Fatalf("partial reset must be now, got %v", reset)
+	}
+	_, _ = l.Allow("new", false)
+	rem, reset = l.State("new")
+	if rem != 0 {
+		t.Fatalf("drained remaining=0, got %d", rem)
+	}
 	if !reset.After(*tp) {
-		t.Fatal("reset must be in the future while quota is spent")
+		t.Fatal("drained reset must be in the future (next token ETA)")
+	}
+	if eta := reset.Sub(*tp); eta < time.Second || eta > 70*time.Second {
+		t.Fatalf("next-token ETA out of range: %v", eta)
+	}
+}
+
+func TestStateSeesGlobal(t *testing.T) {
+	clk, _ := testClock()
+	l := New(60, 2, 2, clk)
+	l.global.tokens = 0
+	if rem, _ := l.State("fresh"); rem != 0 {
+		t.Fatalf("dry global must report 0 even for fresh callers, got %d", rem)
+	}
+}
+
+func TestSweepIdle(t *testing.T) {
+	clk, tp := testClock()
+	l := New(60, 2, 2, clk)
+	for i := 0; i < sweepTrigger+10; i++ {
+		_, _ = l.Allow(fmt.Sprintf("idle-%d", i), false)
+	}
+	if n := l.usersLen(); n != sweepTrigger+10 {
+		t.Fatalf("want %d tracked, got %d", sweepTrigger+10, n)
+	}
+	*tp = tp.Add(sweepIdleAfter + time.Minute)
+	_, _ = l.Allow("new-guy", false) // trips the sweep, then tracks itself
+	if n := l.usersLen(); n != 1 {
+		t.Fatalf("sweep must evict idle buckets, tracked=%d", n)
 	}
 }

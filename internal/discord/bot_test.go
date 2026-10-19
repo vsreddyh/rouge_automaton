@@ -81,4 +81,15 @@ func TestCooldownReplyInVoice(t *testing.T) {
 	if got := b.cooldownReply("u-cool"); !strings.Contains(got, "resupply") {
 		t.Fatalf("dry bucket must report resupply: %q", got)
 	}
+	// Partially spent belt still reads spare (regression: ETA-gated dry).
+	b2 := &Bot{Cfg: config.Load(), Limiter: ratelimit.New(10, 3, 2, nil)}
+	_, _ = b2.Limiter.Allow("u-part", false)
+	if got := b2.cooldownReply("u-part"); !strings.Contains(got, "spare") {
+		t.Fatalf("partial belt must read spare: %q", got)
+	}
+	// Nil limiter never panics, reads full.
+	b3 := &Bot{Cfg: config.Load()}
+	if got := b3.cooldownReply("u-nil"); !strings.Contains(got, "spare") {
+		t.Fatalf("nil limiter must read full: %q", got)
+	}
 }
