@@ -313,7 +313,7 @@ func (b *Bot) onMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 	// History fetch rides under the same indicator — no extra side effects.
 	typeCtx, stopTyping := context.WithCancel(ctx)
 	defer stopTyping()
-	go typingLoop(typeCtx, func(ch string) error { return s.ChannelTyping(ch) }, replyChannel)
+	go typingLoop(typeCtx, func(channelID string) error { return s.ChannelTyping(channelID) }, replyChannel)
 	var history []gorelay.Message
 	if msgs, err := s.ChannelMessages(m.ChannelID, 10, m.ID, "", ""); err == nil {
 		for i := len(msgs) - 1; i >= 0; i-- {
