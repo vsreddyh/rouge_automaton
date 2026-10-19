@@ -18,8 +18,8 @@ func isStatus(q string) bool {
 }
 
 // statusProber is the seam statusReply programs against: model and mongo
-// probes that report "online"/"reachable" or degrade to "unknown". Real
-// wiring lives on Bot; tests inject fakes.
+// probes that report clear/busy/dead/unknown-style strings. Real wiring
+// lives on Bot; tests inject fakes.
 type statusProber interface {
 	probeModel(ctx context.Context) string
 	probeMongo(ctx context.Context) string
@@ -59,12 +59,11 @@ func statusReply(p statusProber, boot time.Time, userID string, l *ratelimit.Lim
 	mongo := p.probeMongo(ctx)
 	belt := "unknown"
 	if l != nil {
-		if rem, reset := l.State(userID); true {
-			if eta := time.Until(reset); rem <= 0 || eta > time.Second {
-				belt = fmt.Sprintf("dry — resupply %s", eta.Round(time.Second))
-			} else {
-				belt = fmt.Sprintf("%d rounds spare", rem)
-			}
+		rem, reset := l.State(userID)
+		if eta := time.Until(reset); rem <= 0 || eta > time.Second {
+			belt = fmt.Sprintf("dry — resupply %s", eta.Round(time.Second))
+		} else {
+			belt = fmt.Sprintf("%d rounds spare", rem)
 		}
 	}
 	return fmt.Sprintf("Gateway hot, Helldiver. Booted %s. Model uplink: %s. Mongo: %s. Belt: %s. Watcher: unreported. Over.",

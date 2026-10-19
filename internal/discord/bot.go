@@ -281,6 +281,16 @@ func (b *Bot) onMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 		b.sendReply(s, m, ch, m.ChannelID, cutRunes(b.cooldownReply(m.Author.ID, free), 2000))
 		return
 	}
+	// /status is answered locally plus cheap probes: like /cooldown it never
+	// spends a belt token and is never 429-denied — a health check must work
+	// when throttled. No auto-thread — it works outside threads and must
+	// not open one for a health check.
+	if isStatus(q) {
+		pctx, pcancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer pcancel()
+		b.sendReply(s, m, ch, m.ChannelID, cutRunes(statusReply(b, b.Boot, m.Author.ID, b.Limiter, pctx), 2000))
+		return
+	}
 	// Client-side guard before any model spend. Key is the caller ID so
 	// thread follow-ups share the caller bucket, not the thread bucket.
 	// A nil limiter (Bot not built via New) fails open, never panics.
@@ -293,15 +303,6 @@ func (b *Bot) onMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 			b.sendReply(s, m, ch, m.ChannelID, fmt.Sprintf(gorelay.Busy, strconv.Itoa(secs)+"s"))
 			return
 		}
-	}
-	// /status is answered locally plus cheap probes: it already spent one
-	// rate token above. No auto-thread — it works outside threads and must
-	// not open one for a health check.
-	if isStatus(q) {
-		pctx, pcancel := context.WithTimeout(context.Background(), 15*time.Second)
-		defer pcancel()
-		b.sendReply(s, m, ch, m.ChannelID, cutRunes(statusReply(b, b.Boot, m.Author.ID, b.Limiter, pctx), 2000))
-		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
