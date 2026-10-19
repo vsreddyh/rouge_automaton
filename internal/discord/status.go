@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/vsreddyh/rouge_automaton/internal/ratelimit"
@@ -47,6 +48,34 @@ func (b *Bot) probeMongo(ctx context.Context) string {
 	return "reachable"
 }
 
+// probeAll runs model and mongo probes concurrently: serially they cost up
+// to 13s (10s model + 3s mongo) inside the 15s /status budget.
+func probeAll(ctx context.Context, p statusProber) (model, mongo string) {
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() { defer wg.Done(); model = p.probeModel(ctx) }()
+	go func() { defer wg.Done(); mongo = p.probeMongo(ctx) }()
+	wg.Wait()
+	return model, mongo
+}
+
+// statusCache bounds /status relay spend: one live probe per caller per
+// statusCacheTTL; faster repeats reuse the last answer with no model call.
+const statusCacheTTL = 10 * time.Second
+
+type cachedStatus struct {
+	at   time.Time
+	text string
+}
+
+// statusCached swaps text in when the caller has a fresh cached answer.
+func statusCached(cache map[string]cachedStatus, userID string, now time.Time) (string, bool) {
+	if c, ok := cache[userID]; ok && now.Sub(c.at) < statusCacheTTL {
+		return c.text, true
+	}
+	return "", false
+}
+
 // statusReply builds the /status answer in voice: gateway + uptime, model,
 // mongo, caller belt, watcher. One failed check degrades to "unknown",
 // never fails the whole command. Never prints secrets — no tokens, no URIs.
@@ -55,13 +84,16 @@ func statusReply(p statusProber, boot time.Time, userID string, l *ratelimit.Lim
 	if !boot.IsZero() {
 		up = boot.Format("Jan 2 15:04") + " (" + time.Since(boot).Round(time.Minute).String() + " ago)"
 	}
-	model := p.probeModel(ctx)
-	mongo := p.probeMongo(ctx)
+	model, mongo := probeAll(ctx, p)
 	belt := "unknown"
 	if l != nil {
 		rem, reset := l.State(userID)
-		if eta := time.Until(reset); rem <= 0 || eta > time.Second {
-			belt = fmt.Sprintf("dry — resupply %s", eta.Round(time.Second))
+		if rem <= 0 {
+			eta := time.Until(reset).Round(time.Second)
+			if eta < time.Second {
+				eta = time.Second
+			}
+			belt = fmt.Sprintf("dry — resupply %s", eta)
 		} else {
 			belt = fmt.Sprintf("%d rounds spare", rem)
 		}

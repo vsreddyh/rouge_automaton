@@ -33,6 +33,10 @@ type Bot struct {
 	Limiter *ratelimit.Limiter
 	// Boot marks process start for /status uptime. Set by New.
 	Boot time.Time
+	// statusCache holds one recent /status answer per caller so repeats
+	// inside statusCacheTTL reuse it with no new relay probe.
+	statusMu    sync.Mutex
+	statusCache map[string]cachedStatus
 	// threads holds live bot sessions: thread IDs the bot opened plus
 	// thread IDs it has spoken in since boot. Zero value is ready.
 	threads threadSet
@@ -286,9 +290,23 @@ func (b *Bot) onMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 	// when throttled. No auto-thread — it works outside threads and must
 	// not open one for a health check.
 	if isStatus(q) {
+		b.statusMu.Lock()
+		cached, hit := statusCached(b.statusCache, m.Author.ID, time.Now())
+		b.statusMu.Unlock()
+		if hit {
+			b.sendReply(s, m, ch, m.ChannelID, cached)
+			return
+		}
 		pctx, pcancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer pcancel()
-		b.sendReply(s, m, ch, m.ChannelID, cutRunes(statusReply(b, b.Boot, m.Author.ID, b.Limiter, pctx), 2000))
+		reply := cutRunes(statusReply(b, b.Boot, m.Author.ID, b.Limiter, pctx), 2000)
+		b.statusMu.Lock()
+		if b.statusCache == nil {
+			b.statusCache = map[string]cachedStatus{}
+		}
+		b.statusCache[m.Author.ID] = cachedStatus{at: time.Now(), text: reply}
+		b.statusMu.Unlock()
+		b.sendReply(s, m, ch, m.ChannelID, reply)
 		return
 	}
 	// Client-side guard before any model spend. Key is the caller ID so

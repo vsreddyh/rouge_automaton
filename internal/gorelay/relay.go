@@ -249,14 +249,15 @@ func (c *Client) Probe(ctx context.Context) string {
 	}
 	resp, err := httpc.Do(req)
 	if err != nil {
-		low := strings.ToLower(err.Error())
-		if strings.Contains(low, "429") || strings.Contains(low, "rate") ||
-			strings.Contains(low, "too many requests") {
+		if probeRateLimited(err.Error()) {
 			return "busy"
 		}
 		return "dead"
 	}
+	// Drain (bounded) before close so the connection stays reusable —
+	// same 1MB-cap reasoning as doRound, smaller budget for a probe.
 	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4<<10))
 	switch resp.StatusCode {
 	case 200:
 		return "clear"
@@ -265,6 +266,17 @@ func (c *Client) Probe(ctx context.Context) string {
 	default:
 		return "dead"
 	}
+}
+
+// probeRateLimited classifies transport errors for Probe. It matches 429,
+// "too many requests", and "rate limit"/"ratelimit" — but never a bare
+// "rate", which overmatches ("separate", "desperate").
+func probeRateLimited(s string) bool {
+	low := strings.ToLower(s)
+	return strings.Contains(low, "429") ||
+		strings.Contains(low, "too many requests") ||
+		strings.Contains(low, "rate limit") ||
+		strings.Contains(low, "ratelimit")
 }
 
 // maxToolRounds caps the think-act loop so one Discord message can never
