@@ -120,6 +120,7 @@ func TestSanitize(t *testing.T) {
 		{"call id", "call_id: XYZ-9 Rear vent.", []string{"call_id", "XYZ-9"}, []string{"Rear vent"}},
 		{"json args", `Rear vent. {"query":"Hulk","k":3}`, []string{`"query"`, "{"}, []string{"Rear vent"}},
 		{"json new keys", `Held. {"planet":"X","top_k":2}`, []string{"top_k", "{"}, []string{"Held"}},
+		{"prose braces kept", `Vent {front} exposed.`, []string{}, []string{"{front}"}},
 		{"narration", "Calling search_units now\nRear vent.", []string{"Calling search_units"}, []string{"Rear vent"}},
 		{"planet fn", "planet_status(Mintoria) says held.", []string{"planet_status("}, []string{"says held"}},
 	}
@@ -157,6 +158,10 @@ func TestSanitize(t *testing.T) {
 	// Empty input signs off without a leading space.
 	if got := Postprocess("   "); got != "Over." {
 		t.Fatalf("empty reply must be bare sign-off: %q", got)
+	}
+	// Uppercase source blobs collapse the same way.
+	if got := Postprocess("Rear vent. [SOURCE: mongo]"); strings.Contains(got, "[SOURCE:") || strings.Count(got, "Source:") != 1 {
+		t.Fatalf("uppercase source must collapse: %q", got)
 	}
 	clean := "Hulk. Rear vent AMR."
 	if got := Sanitize(clean); got != clean {

@@ -84,12 +84,12 @@ var (
 	// cannot orphan). The trailing [\w-]* takes only the ID token, so intel
 	// body after it ("Rear vent.") survives.
 	funcMarkRe = regexp.MustCompile(`(?i)\bfunction[_ ]call\b(?:\s+call[_ ]?id\b)?[\s:]*[\w-]*|\bcall[_ ]?id\b[\s:]*[\w-]*`)
-	// jsonArgsRe strips JSON argument blobs echoed from tool calls. Generic
-	// on shape ({...} up to 500 chars), not on key names, so new tool args
-	// ("planet", "top_k") cannot leak.
-	jsonArgsRe = regexp.MustCompile(`\{[^{}]{0,500}\}`)
+	// jsonArgsRe strips JSON argument blobs echoed from tool calls: braces
+	// holding a quoted key and a colon. The cue keeps legit prose braces
+	// ("{front}") intact while key-less shapes still pass through.
+	jsonArgsRe = regexp.MustCompile(`\{[^{}]*"[^{}]*:[^{}]*\}`)
 	narrateRe  = regexp.MustCompile(`(?im)^\s*(calling|checking|searching|fetching|looking up)\s+(search_\w+|planet_status|wiki_search|the (database|wiki|archives)).{0,120}\n?`)
-	sourceRe   = regexp.MustCompile(`\[source:\s*([^\]]+)\]`)
+	sourceRe   = regexp.MustCompile(`(?i)\[source:\s*([^\]]+)\]`)
 	// spaceRe/blankRe collapse whitespace left behind by the strips above.
 	// Package-level so the hot reply path never recompiles.
 	spaceRe = regexp.MustCompile(`[ \t]{2,}`)
