@@ -58,7 +58,7 @@ func New(perMin, burst int, freeCost float64, clk Clock) *Limiter {
 	return &Limiter{
 		perMin: float64(perMin), burst: float64(burst),
 		users:    map[string]*bucket{},
-		global:   &bucket{tokens: float64(perMin) * 4, last: t},
+		global:   &bucket{tokens: float64(perMin) * globalMultiplier, last: t},
 		freeCost: freeCost, now: now,
 	}
 }
