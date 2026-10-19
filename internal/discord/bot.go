@@ -217,8 +217,9 @@ func (b *Bot) onMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 	// The relay session follows the reply channel: a fresh thread gets its
 	// own session, and follow-ups inside it (ChannelID == thread ID) stay
 	// continuous with the answer that opened it.
-	reply := persona.Postprocess(b.Relay.ChatWithTools(ctx, system, q, history, replyChannel, mcpdb.ToolDefs(), b.Tools.Execute))
-	reply = cutRunes(reply, 2000)
+	// Cut before Postprocess so a >2000-rune reply never amputates the
+	// sign-off: truncation happens first, "Over." lands intact.
+	reply := persona.Postprocess(cutRunes(b.Relay.ChatWithTools(ctx, system, q, history, replyChannel, mcpdb.ToolDefs(), b.Tools.Execute), 2000))
 	if replyChannel == m.ChannelID {
 		if sent, err := s.ChannelMessageSendReply(m.ChannelID, reply, m.Reference()); err == nil && sent != nil && ch != nil && ch.IsThread() {
 			// Spoke in a thread: it is a live session from here on.

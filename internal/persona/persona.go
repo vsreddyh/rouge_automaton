@@ -69,8 +69,9 @@ var (
 	// "layover."/"moreover." must not (the (?:^|\s) guard keeps them out).
 	overRe = regexp.MustCompile(`(?i)(?:^|\s)over\.\s*$`)
 	// serialRe catches any attempt to print a numeric serial ("serial 12345",
-	// "serial: #7") so it can be forced back to the canon placeholder.
-	serialRe = regexp.MustCompile(`(?i)serial[:\s#]*\d+`)
+	// "serial: #7", "serial-number 12345") so it can be forced back to the
+	// canon placeholder.
+	serialRe = regexp.MustCompile(`(?i)serial[:\s#\-]*\d+`)
 )
 
 // soul returns the raw SOUL.md canon. A valid SKILLS_DIR override wins so
