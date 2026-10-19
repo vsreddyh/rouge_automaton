@@ -210,6 +210,7 @@ func (b *Bot) sendReply(s *discordgo.Session, m *discordgo.MessageCreate, ch *di
 	// the parent), so plain-send; on failure fall back to a channel reply
 	// rather than staying silent.
 	if _, err := s.ChannelMessageSend(replyChannel, reply); err != nil {
+		log.Printf("discord: thread send failed in %s: %v", replyChannel, err)
 		_, _ = s.ChannelMessageSendReply(m.ChannelID, reply, m.Reference())
 	}
 }
