@@ -1,6 +1,6 @@
 // Package ratelimit is a client-side token-bucket guard in front of model
 // calls. It burns no model budget itself: Allow checks per-user and global
-// buckets, and Cooldown reports remaining quota for /cooldown replies.
+// buckets, and State reports remaining quota for /cooldown replies.
 package ratelimit
 
 import (
@@ -131,10 +131,8 @@ func (l *Limiter) Allow(key string, freeChannel bool) (ok bool, retryAfter time.
 		return true, 0
 	}
 	// ETA from the scarcest bucket: tokens still owed / refill rate.
-	need := cost
-	if b.tokens < need {
-		need = cost - b.tokens
-		if eta := time.Duration(need / l.perMin * float64(time.Minute)); eta > retryAfter {
+	if b.tokens < cost {
+		if eta := time.Duration((cost-b.tokens)/l.perMin*float64(time.Minute)); eta > retryAfter {
 			retryAfter = eta
 		}
 	}
