@@ -132,7 +132,7 @@ func (l *Limiter) Allow(key string, freeChannel bool) (ok bool, retryAfter time.
 	}
 	// ETA from the scarcest bucket: tokens still owed / refill rate.
 	if b.tokens < cost {
-		if eta := time.Duration((cost-b.tokens)/l.perMin*float64(time.Minute)); eta > retryAfter {
+		if eta := time.Duration((cost - b.tokens) / l.perMin * float64(time.Minute)); eta > retryAfter {
 			retryAfter = eta
 		}
 	}
