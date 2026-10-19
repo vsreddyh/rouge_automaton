@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 
 	souldata "github.com/vsreddyh/rouge_automaton"
 )
@@ -167,7 +168,9 @@ func Sanitize(reply string) string {
 	s = blankRe.ReplaceAllString(s, "\n\n")
 	s = strings.TrimSpace(s)
 	if len(srcs) > 0 {
-		if first := strings.TrimSpace(srcs[0][1]); first != "" && !dupSource(s, first) {
+		// Normalize once with the same cutset dupSource compares under, so
+		// "[source: mongo.]" appends "Source: mongo." — never "mongo..".
+		if first := strings.Trim(strings.TrimSpace(srcs[0][1]), " .;:()[]\"'"); first != "" && !dupSource(s, first) {
 			s = strings.TrimSpace(s) + "\nSource: " + first + "."
 		}
 	}
@@ -195,8 +198,9 @@ func dupSource(s, first string) bool {
 		}
 		rest := strings.TrimSpace(low[idx+i+7:])
 		if strings.HasPrefix(rest, want) {
-			if tail := rest[len(want):]; tail == "" ||
-				strings.ContainsRune(" \t\n.,;:()[]\"'", rune(tail[0])) {
+			tail := rest[len(want):]
+			if r, _ := utf8.DecodeRuneInString(tail); tail == "" ||
+				strings.ContainsRune(" \t\n.,;:()[]\"'", r) {
 				return true
 			}
 		}

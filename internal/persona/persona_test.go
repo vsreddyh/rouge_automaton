@@ -173,6 +173,10 @@ func TestSanitize(t *testing.T) {
 	if got := Postprocess(`Rear vent. [source: "mongo"]`); strings.Count(got, "Source:") != 1 {
 		t.Fatalf("quoted source must fold: %q", got)
 	}
+	// Punctuated blobs normalize to one period, never two.
+	if got := Postprocess(`Rear vent. [source: mongo.]`); strings.Contains(got, "mongo..") {
+		t.Fatalf("double period: %q", got)
+	}
 	// Nested JSON clears fully; mongo must not prefix-match mongodb.
 	if got := Postprocess(`Vent. {"outer": {"inner": 1}}`); strings.Contains(got, "{") {
 		t.Fatalf("nested JSON must clear: %q", got)
