@@ -190,6 +190,31 @@ func (b *Bot) cooldownReply(userID string, freeChannel bool) string {
 	return fmt.Sprintf("Rounds to spare, Helldiver — %d left in this belt. Over.", msgs)
 }
 
+// typingInterval re-ticks the Discord typing indicator while the model
+// works. Discord clears typing after ~10s, so 6s keeps it continuous
+// without spamming; the issue acceptance pins 5–8s.
+const typingInterval = 6 * time.Second
+
+// typingLoop fires tick once immediately, then every typingInterval until
+// ctx ends. Errors are dropped — typing is best-effort feedback, never a
+// failure mode. It sends no messages and opens no threads.
+func typingLoop(ctx context.Context, tick func(string) error, channelID string) {
+	if channelID == "" || tick == nil {
+		return
+	}
+	_ = tick(channelID)
+	t := time.NewTicker(typingInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			_ = tick(channelID)
+		}
+	}
+}
+
 // sendReply delivers text to the right channel: a fresh thread gets a plain
 // send (its starter lives in the parent), otherwise a reply. Shared by the
 // model path and the cheap command/deny paths so behavior never diverges.
@@ -282,6 +307,13 @@ func (b *Bot) onMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 			replyChannel = th.ID
 		}
 	}
+	// Typing starts only here: gate, cooldown, and rate paths above return
+	// without feedback. It targets the reply channel (fresh thread once
+	// created, else the parent) and dies with ctx on reply or cancel.
+	// History fetch rides under the same indicator — no extra side effects.
+	typeCtx, stopTyping := context.WithCancel(ctx)
+	defer stopTyping()
+	go typingLoop(typeCtx, func(ch string) error { return s.ChannelTyping(ch) }, replyChannel)
 	var history []gorelay.Message
 	if msgs, err := s.ChannelMessages(m.ChannelID, 10, m.ID, "", ""); err == nil {
 		for i := len(msgs) - 1; i >= 0; i-- {

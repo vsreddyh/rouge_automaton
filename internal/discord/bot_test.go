@@ -1,8 +1,10 @@
 package discord
 
 import (
+	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/vsreddyh/rouge_automaton/internal/config"
 	"github.com/vsreddyh/rouge_automaton/internal/ratelimit"
@@ -101,4 +103,37 @@ func TestCooldownReplyInVoice(t *testing.T) {
 	if got := b4.cooldownReply("u-free", true); !strings.Contains(got, "resupply") {
 		t.Fatalf("free channel with 1 token must read dry: %q", got)
 	}
+}
+
+func TestTypingInterval(t *testing.T) {
+	if typingInterval < 5*time.Second || typingInterval > 8*time.Second {
+		t.Fatalf("typing tick must be 5-8s, got %v", typingInterval)
+	}
+}
+
+func TestTypingLoop(t *testing.T) {
+	var calls int
+	tick := func(ch string) error {
+		if ch != "reply-ch" {
+			t.Errorf("typing must target reply channel, got %q", ch)
+		}
+		calls++
+		return nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { typingLoop(ctx, tick, "reply-ch"); close(done) }()
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("typing loop must stop on ctx cancel")
+	}
+	if calls < 1 {
+		t.Fatal("typing must fire immediately on receipt")
+	}
+	// Nil tick and empty channel are no-ops, never panics.
+	typingLoop(context.Background(), nil, "x")
+	typingLoop(context.Background(), func(string) error { return nil }, "")
 }
