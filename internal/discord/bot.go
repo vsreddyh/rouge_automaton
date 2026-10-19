@@ -213,7 +213,7 @@ func (b *Bot) onMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 	// persona plus tool procedure, and the model pulls whatever intel it
 	// needs through the think-act loop below. Every message — greetings
 	// included — is answered by the model; nothing is canned.
-	system := persona.SystemPrompt() + mcpdb.ToolGuidance
+	system := persona.PromptFor(q) + mcpdb.ToolGuidance
 	// The relay session follows the reply channel: a fresh thread gets its
 	// own session, and follow-ups inside it (ChannelID == thread ID) stay
 	// continuous with the answer that opened it.
