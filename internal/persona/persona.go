@@ -17,7 +17,7 @@ import (
 // shape (weak point + counter + source, under 120 words), and the
 // data-only rule for retrieved context so wiki text can't steer the model.
 const Suffix = `
-Rules: terse radio bursts, address user as Helldiver, end every intel transmission with ` + "`Over.`" + ` on its own beat.
+Rules: terse radio bursts, address user as Helldiver, end every transmission with ` + "`Over.`" + ` on its own beat.
 Serial always ` + "`[REDACTED]`" + `. Never invent a name. Never claim AI. Never sympathize Automatons.
 Every intel answer: weak point + counter + source. <120 words.
 Equal knowledge on all factions; never refuse Terminid/Illuminate questions.
@@ -90,9 +90,11 @@ func soul() string {
 func SystemPrompt() string { return IdentitySystemPrompt() }
 
 // IdentitySystemPrompt is the full-canon prompt for identity turns: SOUL.md
-// verbatim plus the rules suffix. Identical to SystemPrompt, named so call
-// sites read against IntelSystemPrompt.
-func IdentitySystemPrompt() string { return soul() + Suffix }
+// verbatim plus the rules suffix plus the containment rule (which governs
+// identity answers, so it rides here as well as on the intel prompt).
+// Identical in canon to SystemPrompt's source; named so call sites read
+// against IntelSystemPrompt.
+func IdentitySystemPrompt() string { return soul() + Suffix + containmentRule + "\n" }
 
 // IntelSystemPrompt is the biography-free prompt for intel turns: the short
 // voice card plus the rules suffix plus the containment rule. No SOUL.md
