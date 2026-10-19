@@ -222,6 +222,51 @@ func (c *Client) doRound(ctx context.Context, url, session string, body []byte) 
 	return roundResult{reply: Dead}
 }
 
+// Probe checks model-backend reachability with a minimal 1-token request.
+// It returns "clear" (200), "busy" (429), or "dead" (anything else) so
+// /status can report uplink state without parsing a full answer.
+func (c *Client) Probe(ctx context.Context) string {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	url := strings.TrimSuffix(c.BaseURL, "/") + "/v1/responses"
+	body, _ := json.Marshal(map[string]any{
+		"model":             c.Model,
+		"input":             []Message{{Role: "user", Content: "ping"}},
+		"max_output_tokens": 1, "temperature": 0,
+		"reasoning": map[string]any{"effort": "low"},
+	})
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
+	if err != nil {
+		return "dead"
+	}
+	req.Header.Set("Authorization", "Bearer "+c.APIKey)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "rouge-automaton/1.0")
+	req.Header.Set("x-opencode-session", "rouge-status")
+	httpc := c.HTTP
+	if httpc == nil {
+		httpc = http.DefaultClient
+	}
+	resp, err := httpc.Do(req)
+	if err != nil {
+		low := strings.ToLower(err.Error())
+		if strings.Contains(low, "429") || strings.Contains(low, "rate") ||
+			strings.Contains(low, "too many requests") {
+			return "busy"
+		}
+		return "dead"
+	}
+	defer resp.Body.Close()
+	switch resp.StatusCode {
+	case 200:
+		return "clear"
+	case 429:
+		return "busy"
+	default:
+		return "dead"
+	}
+}
+
 // maxToolRounds caps the think-act loop so one Discord message can never
 // turn into an unbounded relay session.
 const maxToolRounds = 3

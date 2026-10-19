@@ -31,6 +31,8 @@ type Bot struct {
 	Relay   *gorelay.Client
 	Tools   *mcpdb.Executor
 	Limiter *ratelimit.Limiter
+	// Boot marks process start for /status uptime. Set by New.
+	Boot time.Time
 	// threads holds live bot sessions: thread IDs the bot opened plus
 	// thread IDs it has spoken in since boot. Zero value is ready.
 	threads threadSet
@@ -77,7 +79,8 @@ func New(cfg config.Config, db *mongo.Database) (*Bot, error) {
 	b := &Bot{Session: s, Cfg: cfg,
 		Relay:   &gorelay.Client{BaseURL: cfg.OpenCodeGoBaseURL, APIKey: cfg.OpenCodeGoAPIKey, Model: cfg.Model},
 		Tools:   mcpdb.NewExecutor(db, cfg),
-		Limiter: ratelimit.New(cfg.RateLimitPerMin, cfg.RateBurst, ratelimit.DefaultFreeCost, nil)}
+		Limiter: ratelimit.New(cfg.RateLimitPerMin, cfg.RateBurst, ratelimit.DefaultFreeCost, nil),
+		Boot:    time.Now()}
 	s.AddHandler(b.onMessage)
 	return b, nil
 }
@@ -290,6 +293,15 @@ func (b *Bot) onMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 			b.sendReply(s, m, ch, m.ChannelID, fmt.Sprintf(gorelay.Busy, strconv.Itoa(secs)+"s"))
 			return
 		}
+	}
+	// /status is answered locally plus cheap probes: it already spent one
+	// rate token above. No auto-thread — it works outside threads and must
+	// not open one for a health check.
+	if isStatus(q) {
+		pctx, pcancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer pcancel()
+		b.sendReply(s, m, ch, m.ChannelID, cutRunes(statusReply(b, b.Boot, m.Author.ID, b.Limiter, pctx), 2000))
+		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
