@@ -81,14 +81,15 @@ var (
 	// funcMarkRe strips one leaked marker plus its ID token: "function_call",
 	// "call_id"/"call id" (and chained pairs like "function_call call_id
 	// abc123", where the optional group eats the middle marker so the ID
-	// cannot orphan). The trailing [\w-]* takes only the ID token, so intel
-	// body after it ("Rear vent.") survives.
-	funcMarkRe = regexp.MustCompile(`(?i)\bfunction[_ ]call\b(?:\s+call[_ ]?id\b)?[\s:]*[\w-]*|\bcall[_ ]?id\b[\s:]*[\w-]*`)
+	// cannot orphan). ID-consumption applies to the chained/call_id case
+	// only: a bare "function_call" strips just the marker so following
+	// intel ("Rear") survives.
+	funcMarkRe = regexp.MustCompile(`(?i)\bfunction[_ ]call\b(?:\s+call[_ ]?id\b[\s:]*[\w-]+)?|\bcall[_ ]?id\b[\s:]*[\w-]*`)
 	// jsonArgsRe strips JSON argument blobs echoed from tool calls: braces
 	// holding a quoted key and a colon. The cue keeps legit prose braces
 	// ("{front}") intact while key-less shapes still pass through.
 	jsonArgsRe = regexp.MustCompile(`\{[^{}]*"[^{}]*:[^{}]*\}`)
-	narrateRe  = regexp.MustCompile(`(?im)^\s*(calling|checking|searching|fetching|looking up)\s+(search_\w+|planet_status|wiki_search|the (database|wiki|archives)).{0,120}\n?`)
+	narrateRe  = regexp.MustCompile(`(?im)^\s*(calling|checking|searching|fetching|looking up)\s+(search_\w+|planet_status|wiki_search)\b.{0,120}\n?`)
 	sourceRe   = regexp.MustCompile(`(?i)\[source:\s*([^\]]+)\]`)
 	// spaceRe/blankRe collapse whitespace left behind by the strips above.
 	// Package-level so the hot reply path never recompiles.
@@ -144,7 +145,12 @@ func PromptFor(q string) string {
 func Sanitize(reply string) string {
 	s := toolCallRe.ReplaceAllString(reply, "")
 	s = funcMarkRe.ReplaceAllString(s, "")
-	s = jsonArgsRe.ReplaceAllString(s, "")
+	// Bounded loop for nested echoes ("{"outer": {"inner": 1}}"): flat tool
+	// args clear on the first pass; two extra passes close nesting without
+	// risking a pathological loop.
+	for i := 0; i < 3 && jsonArgsRe.MatchString(s); i++ {
+		s = jsonArgsRe.ReplaceAllString(s, "")
+	}
 	s = narrateRe.ReplaceAllString(s, "")
 	srcs := sourceRe.FindAllStringSubmatch(s, -1)
 	s = sourceRe.ReplaceAllString(s, "")
@@ -152,12 +158,17 @@ func Sanitize(reply string) string {
 	s = blankRe.ReplaceAllString(s, "\n\n")
 	s = strings.TrimSpace(s)
 	if len(srcs) > 0 {
-		if first := strings.TrimSpace(srcs[0][1]); first != "" &&
-			!strings.Contains(strings.ToLower(s), "source: "+strings.ToLower(first)) {
+		if first := strings.TrimSpace(srcs[0][1]); first != "" && !dupSource(s, first) {
 			s = strings.TrimSpace(s) + "\nSource: " + first
 		}
 	}
 	return strings.TrimSpace(s)
+}
+
+// dupSource reports whether s already carries a human "Source: <first>"
+// line. Word-boundary match so "mongo" never prefix-matches "mongodb".
+func dupSource(s, first string) bool {
+	return regexp.MustCompile(`(?i)source:\s*` + regexp.QuoteMeta(first) + `\b`).MatchString(s)
 }
 
 // Postprocess enforces voice rules on a model reply. Sanitizing runs first

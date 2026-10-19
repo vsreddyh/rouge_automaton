@@ -117,6 +117,8 @@ func TestSanitize(t *testing.T) {
 		{"tool call", "Hulk. search_units(Hulk) Rear vent.", []string{"search_units("}, []string{"Rear vent"}},
 		{"bare tool", "Intel says planet_status is held.", []string{"planet_status"}, []string{"is held"}},
 		{"call chain", "function_call call_id abc123 Rear vent.", []string{"function_call", "call_id", "abc123"}, []string{"Rear vent"}},
+		{"bare marker", "function_call Rear vent.", []string{"function_call"}, []string{"Rear vent"}},
+		{"prose narration kept", "Searching the archives, Helldiver, rear vent exposed.", []string{}, []string{"rear vent exposed"}},
 		{"call id", "call_id: XYZ-9 Rear vent.", []string{"call_id", "XYZ-9"}, []string{"Rear vent"}},
 		{"json args", `Rear vent. {"query":"Hulk","k":3}`, []string{`"query"`, "{"}, []string{"Rear vent"}},
 		{"json new keys", `Held. {"planet":"X","top_k":2}`, []string{"top_k", "{"}, []string{"Held"}},
@@ -162,6 +164,13 @@ func TestSanitize(t *testing.T) {
 	// Uppercase source blobs collapse the same way.
 	if got := Postprocess("Rear vent. [SOURCE: mongo]"); strings.Contains(got, "[SOURCE:") || strings.Count(got, "Source:") != 1 {
 		t.Fatalf("uppercase source must collapse: %q", got)
+	}
+	// Nested JSON clears fully; mongo must not prefix-match mongodb.
+	if got := Postprocess(`Vent. {"outer": {"inner": 1}}`); strings.Contains(got, "{") {
+		t.Fatalf("nested JSON must clear: %q", got)
+	}
+	if got := Postprocess("Rear vent. Source: mongodb [source: mongo]"); !strings.Contains(got, "Source: mongodb") || !strings.Contains(got, "Source: mongo") {
+		t.Fatalf("mongo must not shadow mongodb: %q", got)
 	}
 	clean := "Hulk. Rear vent AMR."
 	if got := Sanitize(clean); got != clean {
