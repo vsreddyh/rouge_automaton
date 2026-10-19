@@ -58,7 +58,7 @@ func TestCutRunes(t *testing.T) {
 }
 
 func TestIsCooldown(t *testing.T) {
-	for _, q := range []string{"/cooldown", "!cooldown", "  /COOLDOWN  "} {
+	for _, q := range []string{"/cooldown", "!cooldown", "  /COOLDOWN  ", "/cooldown please", "!cooldown now"} {
 		if !isCooldown(q) {
 			t.Fatalf("must detect %q", q)
 		}
@@ -70,7 +70,7 @@ func TestIsCooldown(t *testing.T) {
 
 func TestCooldownReplyInVoice(t *testing.T) {
 	b := &Bot{Cfg: config.Load(), Limiter: ratelimit.New(10, 3, 2, nil)}
-	got := b.cooldownReply("u-cool")
+	got := b.cooldownReply("u-cool", false)
 	if !strings.HasSuffix(got, "Over.") || !strings.Contains(got, "Helldiver") {
 		t.Fatalf("cooldown must stay in voice: %q", got)
 	}
@@ -78,18 +78,27 @@ func TestCooldownReplyInVoice(t *testing.T) {
 	for i := 0; i < 5; i++ {
 		_, _ = b.Limiter.Allow("u-cool", false)
 	}
-	if got := b.cooldownReply("u-cool"); !strings.Contains(got, "resupply") {
+	if got := b.cooldownReply("u-cool", false); !strings.Contains(got, "resupply") {
 		t.Fatalf("dry bucket must report resupply: %q", got)
 	}
 	// Partially spent belt still reads spare (regression: ETA-gated dry).
 	b2 := &Bot{Cfg: config.Load(), Limiter: ratelimit.New(10, 3, 2, nil)}
 	_, _ = b2.Limiter.Allow("u-part", false)
-	if got := b2.cooldownReply("u-part"); !strings.Contains(got, "spare") {
+	if got := b2.cooldownReply("u-part", false); !strings.Contains(got, "spare") {
 		t.Fatalf("partial belt must read spare: %q", got)
 	}
 	// Nil limiter never panics, reads full.
 	b3 := &Bot{Cfg: config.Load()}
-	if got := b3.cooldownReply("u-nil"); !strings.Contains(got, "spare") {
+	if got := b3.cooldownReply("u-nil", false); !strings.Contains(got, "spare") {
 		t.Fatalf("nil limiter must read full: %q", got)
+	}
+	// Free-channel cost: 1 token left reads dry on a free channel.
+	b4 := &Bot{Cfg: config.Load(), Limiter: ratelimit.New(60, 2, 2, nil)}
+	_, _ = b4.Limiter.Allow("u-free", false) // 1 token left
+	if got := b4.cooldownReply("u-free", false); !strings.Contains(got, "spare") {
+		t.Fatalf("normal channel with 1 token must read spare: %q", got)
+	}
+	if got := b4.cooldownReply("u-free", true); !strings.Contains(got, "resupply") {
+		t.Fatalf("free channel with 1 token must read dry: %q", got)
 	}
 }

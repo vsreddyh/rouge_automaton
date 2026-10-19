@@ -67,7 +67,7 @@ func TestFreeChannelTighter(t *testing.T) {
 func TestState(t *testing.T) {
 	clk, tp := testClock()
 	l := New(60, 2, 2, clk)
-	rem, reset := l.State("new")
+	rem, reset := l.State("new", 1)
 	if rem != 2 {
 		t.Fatalf("fresh state = burst, got %d", rem)
 	}
@@ -77,7 +77,7 @@ func TestState(t *testing.T) {
 	_, _ = l.Allow("new", false)
 	// Partially spent: still spare, reset stays now — dryness gates on
 	// remaining<=0, never on the ETA (regression: time-to-full lied here).
-	rem, reset = l.State("new")
+	rem, reset = l.State("new", 1)
 	if rem != 1 {
 		t.Fatalf("after one call remaining=1, got %d", rem)
 	}
@@ -85,7 +85,7 @@ func TestState(t *testing.T) {
 		t.Fatalf("partial reset must be now, got %v", reset)
 	}
 	_, _ = l.Allow("new", false)
-	rem, reset = l.State("new")
+	rem, reset = l.State("new", 1)
 	if rem != 0 {
 		t.Fatalf("drained remaining=0, got %d", rem)
 	}
@@ -101,8 +101,32 @@ func TestStateSeesGlobal(t *testing.T) {
 	clk, _ := testClock()
 	l := New(60, 2, 2, clk)
 	l.global.tokens = 0
-	if rem, _ := l.State("fresh"); rem != 0 {
+	if rem, _ := l.State("fresh", 1); rem != 0 {
 		t.Fatalf("dry global must report 0 even for fresh callers, got %d", rem)
+	}
+}
+
+func TestStateFreshMinWithGlobal(t *testing.T) {
+	clk, _ := testClock()
+	l := New(60, 3, 2, clk) // burst 3
+	l.global.tokens = 1.5
+	// Fresh caller: burst says 3, global affords 1 — report the min.
+	if rem, _ := l.State("fresh", 1); rem != 1 {
+		t.Fatalf("fresh state must min burst with global, got %d", rem)
+	}
+}
+
+func TestStateCost(t *testing.T) {
+	clk, _ := testClock()
+	l := New(60, 3, 2, clk)
+	if msgs, _ := l.State("u", 2); msgs != 1 {
+		t.Fatalf("3 tokens at cost 2 = 1 msg, got %d", msgs)
+	}
+	if msgs, reset := l.State("u", 1000); msgs != 0 || !reset.After(time.Now()) {
+		t.Fatalf("unaffordable cost must report 0 with future ETA: %d/%v", msgs, reset)
+	}
+	if msgs, _ := l.State("u", 0); msgs != 3 {
+		t.Fatalf("non-positive cost normalizes to 1, got %d", msgs)
 	}
 }
 

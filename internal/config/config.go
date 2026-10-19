@@ -2,6 +2,7 @@
 package config
 
 import (
+	"log"
 	"net/url"
 	"os"
 	"strconv"
@@ -69,11 +70,13 @@ func strSet(csv string) map[string]bool {
 }
 
 // getenvInt reads an int env var, defaulting on unset or unparsable input.
+// A fallback on explicitly-set garbage logs once so misconfig is visible.
 func getenvInt(key string, def int) int {
 	if v, ok := os.LookupEnv(key); ok {
 		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && n > 0 {
 			return n
 		}
+		log.Printf("config: %s=%q invalid, using default %d", key, v, def)
 	}
 	return def
 }

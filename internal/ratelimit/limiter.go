@@ -11,6 +11,13 @@ import (
 // Clock lets tests control time; nil means time.Now.
 type Clock func() time.Time
 
+// globalMultiplier sizes the shared bucket relative to one caller.
+const globalMultiplier = 4
+
+// DefaultFreeCost prices free-response-channel messages: double tokens,
+// the tighter bucket the issue requires.
+const DefaultFreeCost = 2.0
+
 // Limiter holds per-user and global token buckets with periodic refill.
 // Zero value is not ready — use New.
 type Limiter struct {
@@ -39,7 +46,7 @@ func New(perMin, burst int, freeCost float64, clk Clock) *Limiter {
 		burst = 3
 	}
 	if freeCost <= 0 {
-		freeCost = 2
+		freeCost = DefaultFreeCost
 	}
 	now := clk
 	if now == nil {
@@ -98,7 +105,7 @@ func (l *Limiter) Allow(key string, freeChannel bool) (ok bool, retryAfter time.
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	t := l.now()
-	l.refill(l.global, l.perMin*4, l.perMin*4, t)
+	l.refill(l.global, l.perMin*globalMultiplier, l.perMin*globalMultiplier, t)
 	if len(l.users) > sweepTrigger {
 		l.sweep(t)
 	}
@@ -122,7 +129,7 @@ func (l *Limiter) Allow(key string, freeChannel bool) (ok bool, retryAfter time.
 		}
 	}
 	if l.global.tokens < cost {
-		if eta := time.Duration((cost - l.global.tokens) / (l.perMin * 4) * float64(time.Minute)); eta > retryAfter {
+		if eta := time.Duration((cost - l.global.tokens) / (l.perMin * globalMultiplier) * float64(time.Minute)); eta > retryAfter {
 			retryAfter = eta
 		}
 	}
@@ -132,45 +139,43 @@ func (l *Limiter) Allow(key string, freeChannel bool) (ok bool, retryAfter time.
 	return false, retryAfter.Round(time.Second)
 }
 
-// State reports remaining whole cost-1 tokens — the scarcer of the caller
-// and global buckets, so a globally-throttled caller never sees "spare" —
-// plus the time the next token arrives. reset is now when a token is
-// already affordable: callers must gate dryness on remaining<=0, never on
-// the ETA (which used to be time-to-full and lied while partially spent).
-func (l *Limiter) State(key string) (remaining int, reset time.Time) {
+// State reports affordable messages at the given cost — the scarcer of the
+// caller and global buckets, so a globally-throttled caller never sees
+// "spare" — plus the time the next message becomes affordable. reset is now
+// when a message is already affordable: callers must gate dryness on
+// msgs<=0, never on the ETA. Non-positive cost normalizes to 1.
+func (l *Limiter) State(key string, cost float64) (msgs int, reset time.Time) {
+	if cost <= 0 {
+		cost = 1
+	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	t := l.now()
-	l.refill(l.global, l.perMin*4, l.perMin*4, t)
-	b, ok := l.users[key]
-	if !ok {
-		if l.global.tokens >= 1 {
-			return int(l.burst), t
+	l.refill(l.global, l.perMin*globalMultiplier, l.perMin*globalMultiplier, t)
+	// Scarcer bucket binds. A fresh caller counts as a full personal
+	// bucket at burst; a drained global still gates them.
+	tok, rate := l.global.tokens, l.perMin*globalMultiplier
+	if b, ok := l.users[key]; ok {
+		l.refill(b, l.perMin, l.burst, t)
+		if b.tokens < tok {
+			tok, rate = b.tokens, l.perMin
 		}
-		return 0, l.nextToken(t, l.global.tokens, l.perMin*4)
+	} else if l.burst < tok {
+		tok, rate = l.burst, l.perMin
 	}
-	l.refill(b, l.perMin, l.burst, t)
-	rem := b.tokens
-	rate := l.perMin
-	tok := b.tokens
-	if l.global.tokens < rem {
-		rem = l.global.tokens
-		rate = l.perMin * 4
-		tok = l.global.tokens
+	if tok < 0 {
+		tok = 0
 	}
-	if rem < 0 {
-		rem = 0
+	if tok >= cost {
+		return int(tok / cost), t
 	}
-	if rem >= 1 {
-		return int(rem), t
-	}
-	return 0, l.nextToken(t, tok, rate)
+	return 0, l.nextToken(t, tok, cost, rate)
 }
 
-// nextToken returns when one token accrues from tok at rate/min, floored at
+// nextToken returns when need tokens accrue from tok at rate/min, floored at
 // a one-second ETA so replies never print "0s".
-func (l *Limiter) nextToken(t time.Time, tok, rate float64) time.Time {
-	next := t.Add(time.Duration((1 - tok) / rate * float64(time.Minute)))
+func (l *Limiter) nextToken(t time.Time, tok, need, rate float64) time.Time {
+	next := t.Add(time.Duration((need - tok) / rate * float64(time.Minute)))
 	if next.Sub(t) < time.Second {
 		next = t.Add(time.Second)
 	}

@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -76,7 +77,7 @@ func New(cfg config.Config, db *mongo.Database) (*Bot, error) {
 	b := &Bot{Session: s, Cfg: cfg,
 		Relay:   &gorelay.Client{BaseURL: cfg.OpenCodeGoBaseURL, APIKey: cfg.OpenCodeGoAPIKey, Model: cfg.Model},
 		Tools:   mcpdb.NewExecutor(db, cfg),
-		Limiter: ratelimit.New(cfg.RateLimitPerMin, cfg.RateBurst, 2, nil)}
+		Limiter: ratelimit.New(cfg.RateLimitPerMin, cfg.RateBurst, ratelimit.DefaultFreeCost, nil)}
 	s.AddHandler(b.onMessage)
 	return b, nil
 }
@@ -155,31 +156,41 @@ func (b *Bot) liveSession(s *discordgo.Session, ch *discordgo.Channel) bool {
 	return false
 }
 
-// isCooldown reports whether q is a quota inquiry: /cooldown or !cooldown,
-// case-insensitive, with or without surrounding whitespace.
+// isCooldown reports whether q is a quota inquiry: /cooldown or !cooldown
+// (case-insensitive), optionally followed by arguments — "/cooldown foo"
+// stays a command so typos never burn model quota on a confused answer.
 func isCooldown(q string) bool {
 	s := strings.ToLower(strings.TrimSpace(q))
-	return s == "/cooldown" || s == "!cooldown"
+	for _, cmd := range []string{"/cooldown", "!cooldown"} {
+		if s == cmd || strings.HasPrefix(s, cmd+" ") {
+			return true
+		}
+	}
+	return false
 }
 
 // cooldownReply answers a quota inquiry in voice without burning a model
-// call: remaining whole tokens, or the next-token ETA when dry. Dryness
-// gates on remaining<=0 only — Limiter.State's reset is time-to-next-token,
-// so a partially-spent belt still reads "spare". A missing limiter reads
-// full rather than panicking.
-func (b *Bot) cooldownReply(userID string) string {
+// call: affordable messages at the caller's channel cost, or the next-message
+// ETA when dry. Dryness gates on msgs<=0 only — Limiter.State's reset is
+// time-to-next-message, so a partially-spent belt still reads "spare".
+// A missing limiter reads full rather than panicking.
+func (b *Bot) cooldownReply(userID string, freeChannel bool) string {
 	if b.Limiter == nil {
 		return "Rounds to spare, Helldiver — belt reads full. Over."
 	}
-	rem, reset := b.Limiter.State(userID)
-	if rem <= 0 {
+	cost := 1.0
+	if freeChannel {
+		cost = ratelimit.DefaultFreeCost
+	}
+	msgs, reset := b.Limiter.State(userID, cost)
+	if msgs <= 0 {
 		eta := time.Until(reset).Round(time.Second)
 		if eta < time.Second {
 			eta = time.Second
 		}
 		return fmt.Sprintf("Magazine dry, Helldiver. Next resupply in %s. Over.", eta)
 	}
-	return fmt.Sprintf("Rounds to spare, Helldiver — %d left in this belt. Over.", rem)
+	return fmt.Sprintf("Rounds to spare, Helldiver — %d left in this belt. Over.", msgs)
 }
 
 // sendReply delivers text to the right channel: a fresh thread gets a plain
@@ -234,7 +245,7 @@ func (b *Bot) onMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 	}
 	// /cooldown is cheap and burns nothing: answer from local quota state.
 	if isCooldown(q) {
-		b.sendReply(s, m, ch, m.ChannelID, cutRunes(b.cooldownReply(m.Author.ID), 2000))
+		b.sendReply(s, m, ch, m.ChannelID, cutRunes(b.cooldownReply(m.Author.ID, free), 2000))
 		return
 	}
 	// Client-side guard before any model spend. Key is the caller ID so
@@ -246,7 +257,7 @@ func (b *Bot) onMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 			if secs < 1 {
 				secs = 1
 			}
-			b.sendReply(s, m, ch, m.ChannelID, fmt.Sprintf(gorelay.Busy, fmt.Sprintf("%ds", secs)))
+			b.sendReply(s, m, ch, m.ChannelID, fmt.Sprintf(gorelay.Busy, strconv.Itoa(secs)+"s"))
 			return
 		}
 	}
