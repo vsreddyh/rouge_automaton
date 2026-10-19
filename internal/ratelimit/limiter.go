@@ -54,12 +54,12 @@ func New(perMin, burst int, freeCost float64, clk Clock) *Limiter {
 	}
 }
 
-// refill adds rate*elapsed tokens, capped at cap.
-func (l *Limiter) refill(b *bucket, rate, cap float64, t time.Time) {
+// refill adds rate*elapsed tokens, capped at max.
+func (l *Limiter) refill(b *bucket, rate, max float64, t time.Time) {
 	if el := t.Sub(b.last).Minutes(); el > 0 {
 		b.tokens += el * rate
-		if b.tokens > cap {
-			b.tokens = cap
+		if b.tokens > max {
+			b.tokens = max
 		}
 		b.last = t
 	}
