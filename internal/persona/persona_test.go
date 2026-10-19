@@ -112,18 +112,27 @@ func TestSanitize(t *testing.T) {
 		name string
 		in   string
 		bad  []string
+		keep []string
 	}{
-		{"tool call", "Hulk. search_units(Hulk) Rear vent.", []string{"search_units("}},
-		{"call id", "function_call call_id abc123 Rear vent.", []string{"function_call", "call_id", "abc123"}},
-		{"json args", `Rear vent. {"query":"Hulk","k":3}`, []string{`"query"`}},
-		{"narration", "Calling search_units now\nRear vent.", []string{"Calling search_units"}},
-		{"planet fn", "planet_status(Mintoria) says held.", []string{"planet_status("}},
+		{"tool call", "Hulk. search_units(Hulk) Rear vent.", []string{"search_units("}, []string{"Rear vent"}},
+		{"bare tool", "Intel says planet_status is held.", []string{"planet_status"}, []string{"is held"}},
+		{"call chain", "function_call call_id abc123 Rear vent.", []string{"function_call", "call_id", "abc123"}, []string{"Rear vent"}},
+		{"call id", "call_id: XYZ-9 Rear vent.", []string{"call_id", "XYZ-9"}, []string{"Rear vent"}},
+		{"json args", `Rear vent. {"query":"Hulk","k":3}`, []string{`"query"`, "{"}, []string{"Rear vent"}},
+		{"json new keys", `Held. {"planet":"X","top_k":2}`, []string{"top_k", "{"}, []string{"Held"}},
+		{"narration", "Calling search_units now\nRear vent.", []string{"Calling search_units"}, []string{"Rear vent"}},
+		{"planet fn", "planet_status(Mintoria) says held.", []string{"planet_status("}, []string{"says held"}},
 	}
 	for _, c := range cases {
 		got := Postprocess(c.in)
 		for _, b := range c.bad {
 			if strings.Contains(got, b) {
 				t.Fatalf("%s: leak %q in %q", c.name, b, got)
+			}
+		}
+		for _, k := range c.keep {
+			if !strings.Contains(got, k) {
+				t.Fatalf("%s: body lost %q in %q", c.name, k, got)
 			}
 		}
 		if !strings.HasSuffix(got, "Over.") {
@@ -140,6 +149,14 @@ func TestSanitize(t *testing.T) {
 	}
 	if !strings.Contains(got, "Rear vent.") {
 		t.Fatalf("intel body must survive sanitize: %q", got)
+	}
+	// A pre-existing human Source line must not duplicate.
+	if got := Postprocess("Rear vent. Source: mongo [source: mongo]"); strings.Count(got, "Source:") != 1 {
+		t.Fatalf("duplicate Source lines: %q", got)
+	}
+	// Empty input signs off without a leading space.
+	if got := Postprocess("   "); got != "Over." {
+		t.Fatalf("empty reply must be bare sign-off: %q", got)
 	}
 	clean := "Hulk. Rear vent AMR."
 	if got := Sanitize(clean); got != clean {

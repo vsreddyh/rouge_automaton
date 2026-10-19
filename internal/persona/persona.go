@@ -74,13 +74,26 @@ var (
 	// canon placeholder. An optional "number" bridges word-gap forms; the
 	// backstop errs toward redaction.
 	serialRe = regexp.MustCompile(`(?i)serial[:\s#\-]*(number[:\s#\-]*)?\d+`)
-	// toolCallRe strips leaked tool-loop artifacts: search_units(...),
-	// planet_status, function_call/call_id markers, and JSON arg blobs.
-	toolCallRe = regexp.MustCompile(`(?i)\b(search_units|search_gear|search_world|planet_status|wiki_search)\s*\([^)]*\)`)
-	funcMarkRe = regexp.MustCompile(`(?i)\b(function_call|function call|call_id|call id)\b[^.\n]*`)
-	jsonArgsRe = regexp.MustCompile(`\{[^{}]*"(query|name|faction|k)"[^{}]*\}`)
+	// toolCallRe strips leaked tool names with args ("search_units(Hulk)")
+	// and bare ("planet_status"): the parens group is optional because the
+	// model sometimes narrates the name without arguments.
+	toolCallRe = regexp.MustCompile(`(?i)\b(search_units|search_gear|search_world|planet_status|wiki_search)\b(?:\s*\([^)]*\))?`)
+	// funcMarkRe strips one leaked marker plus its ID token: "function_call",
+	// "call_id"/"call id" (and chained pairs like "function_call call_id
+	// abc123", where the optional group eats the middle marker so the ID
+	// cannot orphan). The trailing [\w-]* takes only the ID token, so intel
+	// body after it ("Rear vent.") survives.
+	funcMarkRe = regexp.MustCompile(`(?i)\bfunction[_ ]call\b(?:\s+call[_ ]?id\b)?[\s:]*[\w-]*|\bcall[_ ]?id\b[\s:]*[\w-]*`)
+	// jsonArgsRe strips JSON argument blobs echoed from tool calls. Generic
+	// on shape ({...} up to 500 chars), not on key names, so new tool args
+	// ("planet", "top_k") cannot leak.
+	jsonArgsRe = regexp.MustCompile(`\{[^{}]{0,500}\}`)
 	narrateRe  = regexp.MustCompile(`(?im)^\s*(calling|checking|searching|fetching|looking up)\s+(search_\w+|planet_status|wiki_search|the (database|wiki|archives)).{0,120}\n?`)
 	sourceRe   = regexp.MustCompile(`\[source:\s*([^\]]+)\]`)
+	// spaceRe/blankRe collapse whitespace left behind by the strips above.
+	// Package-level so the hot reply path never recompiles.
+	spaceRe = regexp.MustCompile(`[ \t]{2,}`)
+	blankRe = regexp.MustCompile(`\n{3,}`)
 )
 
 // soul returns the raw SOUL.md canon. A valid SKILLS_DIR override wins so
@@ -123,8 +136,9 @@ func PromptFor(q string) string {
 }
 
 // Sanitize strips tool-loop artifacts from user-visible text: tool names
-// with args, function_call/call_id markers, JSON arg blobs, narrated
-// lookups, and duplicate [source:] blobs (first kept as "Source: x").
+// (with or without args), function_call/call_id markers plus ID tokens,
+// narrated lookups, JSON arg blobs, and duplicate [source:] blobs — the
+// first blob is kept as one human "Source: x" line, extras are dropped.
 // Model-facing context and gorelay logs are untouched — this runs only on
 // the final reply path. Idempotent: clean text passes through unchanged.
 func Sanitize(reply string) string {
@@ -134,16 +148,16 @@ func Sanitize(reply string) string {
 	s = narrateRe.ReplaceAllString(s, "")
 	srcs := sourceRe.FindAllStringSubmatch(s, -1)
 	s = sourceRe.ReplaceAllString(s, "")
-	s = regexp.MustCompile(`[ \t]{2,}`).ReplaceAllString(s, " ")
-	s = regexp.MustCompile(`\n{3,}`).ReplaceAllString(s, "\n\n")
+	s = spaceRe.ReplaceAllString(s, " ")
+	s = blankRe.ReplaceAllString(s, "\n\n")
 	s = strings.TrimSpace(s)
 	if len(srcs) > 0 {
-		first := strings.TrimSpace(srcs[0][1])
-		// Drop a pre-existing human Source line only if it duplicates the
-		// kept blob; otherwise keep both (model may cite mongo + wiki).
-		s = strings.TrimSpace(s) + "\nSource: " + first
+		if first := strings.TrimSpace(srcs[0][1]); first != "" &&
+			!strings.Contains(strings.ToLower(s), "source: "+strings.ToLower(first)) {
+			s = strings.TrimSpace(s) + "\nSource: " + first
+		}
 	}
-	return strings.TrimSpace(regexp.MustCompile(`\n\s*\n\s*\n`).ReplaceAllString(s, "\n\n"))
+	return strings.TrimSpace(s)
 }
 
 // Postprocess enforces voice rules on a model reply. Sanitizing runs first
@@ -155,6 +169,9 @@ func Postprocess(reply string) string {
 		return "Over."
 	}
 	reply = Sanitize(reply)
+	if strings.TrimSpace(reply) == "" {
+		return "Over."
+	}
 	reply = serialRe.ReplaceAllString(strings.TrimSpace(reply), "serial [REDACTED]")
 	if !overRe.MatchString(reply) {
 		// Append the sign-off without mangling terminal punctuation we did
