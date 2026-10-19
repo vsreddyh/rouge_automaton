@@ -81,16 +81,21 @@ var (
 	// funcMarkRe strips one leaked marker plus its ID token: "function_call",
 	// "call_id"/"call id" (and chained pairs like "function_call call_id
 	// abc123", where the optional group eats the middle marker so the ID
-	// cannot orphan). ID-consumption applies to the chained/call_id case
-	// only: a bare "function_call" strips just the marker so following
-	// intel ("Rear") survives.
-	funcMarkRe = regexp.MustCompile(`(?i)\bfunction[_ ]call\b(?:\s+call[_ ]?id\b[\s:]*[\w-]+)?|\bcall[_ ]?id\b[\s:]*[\w-]*`)
+	// cannot orphan). ID-consumption requires a digit in the token
+	// ([\w-]*\d[\w-]*): "call_id Rear" strips the marker but keeps Rear —
+	// intel safety wins over marker hygiene.
+	funcMarkRe = regexp.MustCompile(`(?i)\bfunction[_ ]call\b(?:\s+call[_ ]?id\b(?:[\s:]*[\w-]*\d[\w-]*)?)?|\bcall[_ ]?id\b(?:[\s:]*[\w-]*\d[\w-]*)?`)
 	// jsonArgsRe strips JSON argument blobs echoed from tool calls: braces
 	// holding a quoted key and a colon. The cue keeps legit prose braces
 	// ("{front}") intact while key-less shapes still pass through.
 	jsonArgsRe = regexp.MustCompile(`\{[^{}]*"[^{}]*:[^{}]*\}`)
-	narrateRe  = regexp.MustCompile(`(?im)^\s*(calling|checking|searching|fetching|looking up)\s+(search_\w+|planet_status|wiki_search)\b.{0,120}\n?`)
-	sourceRe   = regexp.MustCompile(`(?i)\[source:\s*([^\]]+)\]`)
+	// narrateRe strips a narration line that holds nothing but the lookup
+	// ("Calling search_units now\n"): the tool token plus a short tail must
+	// reach newline or end-of-input. Same-line intel ("... now Rear vent.")
+	// never matches — narration leak beats intel loss, and ToolGuidance
+	// plus the relay ack-nudge prevent narration upstream.
+	narrateRe = regexp.MustCompile(`(?im)^\s*(calling|checking|searching|fetching|looking up)\s+(search_\w+|planet_status|wiki_search)\b[^\n.]{0,40}(?:\n|$)`)
+	sourceRe  = regexp.MustCompile(`(?i)\[source:\s*([^\]]+)\]`)
 	// spaceRe/blankRe collapse whitespace left behind by the strips above.
 	// Package-level so the hot reply path never recompiles.
 	spaceRe = regexp.MustCompile(`[ \t]{2,}`)
@@ -159,16 +164,33 @@ func Sanitize(reply string) string {
 	s = strings.TrimSpace(s)
 	if len(srcs) > 0 {
 		if first := strings.TrimSpace(srcs[0][1]); first != "" && !dupSource(s, first) {
-			s = strings.TrimSpace(s) + "\nSource: " + first
+			s = strings.TrimSpace(s) + "\nSource: " + first + "."
 		}
 	}
 	return strings.TrimSpace(s)
 }
 
 // dupSource reports whether s already carries a human "Source: <first>"
-// line. Word-boundary match so "mongo" never prefix-matches "mongodb".
+// reference. Token-compared and case-folded, so "mongo" never
+// prefix-matches "mongodb" — and no per-reply MustCompile on the hot path.
 func dupSource(s, first string) bool {
-	return regexp.MustCompile(`(?i)source:\s*` + regexp.QuoteMeta(first) + `\b`).MatchString(s)
+	want := strings.ToLower(strings.Trim(first, " ."))
+	low := strings.ToLower(s)
+	idx := 0
+	for {
+		i := strings.Index(low[idx:], "source:")
+		if i < 0 {
+			return false
+		}
+		rest := strings.TrimSpace(low[idx+i+7:])
+		if j := strings.IndexAny(rest, " \t\n.,"); j >= 0 {
+			rest = rest[:j]
+		}
+		if rest == want {
+			return true
+		}
+		idx += i + 7
+	}
 }
 
 // Postprocess enforces voice rules on a model reply. Sanitizing runs first
