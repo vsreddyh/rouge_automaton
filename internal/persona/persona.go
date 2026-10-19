@@ -70,8 +70,9 @@ var (
 	overRe = regexp.MustCompile(`(?i)(?:^|\s)over\.\s*$`)
 	// serialRe catches any attempt to print a numeric serial ("serial 12345",
 	// "serial: #7", "serial-number 12345") so it can be forced back to the
-	// canon placeholder.
-	serialRe = regexp.MustCompile(`(?i)serial[:\s#\-]*\d+`)
+	// canon placeholder. An optional "number" bridges word-gap forms; the
+	// backstop errs toward redaction.
+	serialRe = regexp.MustCompile(`(?i)serial[\s#\-]*(number[\s#\-]*)?\d+`)
 )
 
 // soul returns the raw SOUL.md canon. A valid SKILLS_DIR override wins so
