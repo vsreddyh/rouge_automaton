@@ -79,12 +79,12 @@ var (
 	// model sometimes narrates the name without arguments.
 	toolCallRe = regexp.MustCompile(`(?i)\b(search_units|search_gear|search_world|planet_status|wiki_search)\b(?:\s*\([^)]*\))?`)
 	// funcMarkRe strips one leaked marker plus its ID token: "function_call",
-	// "call_id"/"call id" (and chained pairs like "function_call call_id
-	// abc123", where the optional group eats the middle marker so the ID
-	// cannot orphan). ID-consumption requires a digit in the token
-	// ([\w-]*\d[\w-]*): "call_id Rear" strips the marker but keeps Rear —
-	// intel safety wins over marker hygiene.
-	funcMarkRe = regexp.MustCompile(`(?i)\bfunction[_ ]call\b(?:\s+call[_ ]?id\b(?:[\s:]*[\w-]*\d[\w-]*)?)?|\bcall[_ ]?id\b(?:[\s:]*[\w-]*\d[\w-]*)?`)
+	// optionally followed by a digit-shaped ID ("function_call abc123") or a
+	// chained "call_id ..." pair, then "call_id"/"call id" the same way.
+	// ID-consumption requires a digit in the token ([\w-]*\d[\w-]*):
+	// "call_id Rear" strips the marker but keeps Rear — intel safety wins
+	// over marker hygiene.
+	funcMarkRe = regexp.MustCompile(`(?i)\bfunction[_ ]call\b(?:[\s:]*[\w-]*\d[\w-]*)?(?:\s+call[_ ]?id\b(?:[\s:]*[\w-]*\d[\w-]*)?)?|\bcall[_ ]?id\b(?:[\s:]*[\w-]*\d[\w-]*)?`)
 	// jsonArgsRe strips JSON argument blobs echoed from tool calls: braces
 	// holding a quoted key and a colon. The cue keeps legit prose braces
 	// ("{front}") intact while key-less shapes still pass through.
@@ -148,7 +148,10 @@ func PromptFor(q string) string {
 // Model-facing context and gorelay logs are untouched — this runs only on
 // the final reply path. Idempotent: clean text passes through unchanged.
 func Sanitize(reply string) string {
-	s := toolCallRe.ReplaceAllString(reply, "")
+	// Narration first: "Calling search_units now" must strip whole, before
+	// toolCallRe deletes the tool token and orphans "Calling now".
+	s := narrateRe.ReplaceAllString(reply, "")
+	s = toolCallRe.ReplaceAllString(s, "")
 	s = funcMarkRe.ReplaceAllString(s, "")
 	// Bounded loop for nested echoes ("{"outer": {"inner": 1}}"): flat tool
 	// args clear on the first pass; two extra passes close nesting without
@@ -156,7 +159,6 @@ func Sanitize(reply string) string {
 	for i := 0; i < 3 && jsonArgsRe.MatchString(s); i++ {
 		s = jsonArgsRe.ReplaceAllString(s, "")
 	}
-	s = narrateRe.ReplaceAllString(s, "")
 	srcs := sourceRe.FindAllStringSubmatch(s, -1)
 	s = sourceRe.ReplaceAllString(s, "")
 	s = spaceRe.ReplaceAllString(s, " ")
@@ -183,7 +185,7 @@ func dupSource(s, first string) bool {
 			return false
 		}
 		rest := strings.TrimSpace(low[idx+i+7:])
-		if j := strings.IndexAny(rest, " \t\n.,"); j >= 0 {
+		if j := strings.IndexAny(rest, " \t\n.,;:()[]\"'"); j >= 0 {
 			rest = rest[:j]
 		}
 		if rest == want {

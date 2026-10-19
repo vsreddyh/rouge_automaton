@@ -123,9 +123,10 @@ func TestSanitize(t *testing.T) {
 		{"json args", `Rear vent. {"query":"Hulk","k":3}`, []string{`"query"`, "{"}, []string{"Rear vent"}},
 		{"json new keys", `Held. {"planet":"X","top_k":2}`, []string{"top_k", "{"}, []string{"Held"}},
 		{"prose braces kept", `Vent {front} exposed.`, []string{}, []string{"{front}"}},
-		{"narration", "Calling search_units now\nRear vent.", []string{"Calling search_units"}, []string{"Rear vent"}},
+		{"narration", "Calling search_units now\nRear vent.", []string{"Calling search_units", "Calling now"}, []string{"Rear vent"}},
 		{"narration sameline kept", "Calling search_units now Rear vent.", []string{}, []string{"Rear vent"}},
 		{"call bare id", "call_id Rear vent.", []string{"call_id Rear"}, []string{"Rear vent"}},
+		{"function direct id", "function_call abc123 Rear vent.", []string{"function_call", "abc123"}, []string{"Rear vent"}},
 		{"planet fn", "planet_status(Mintoria) says held.", []string{"planet_status("}, []string{"says held"}},
 	}
 	for _, c := range cases {
