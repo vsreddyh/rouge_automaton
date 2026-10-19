@@ -19,7 +19,7 @@ const globalMultiplier = 4
 const DefaultFreeCost = 2.0
 
 // Limiter holds per-user and global token buckets with periodic refill.
-// Zero value is not ready — use New.
+// Construct with New; the zero value is not ready (nil map and buckets).
 type Limiter struct {
 	mu       sync.Mutex
 	perMin   float64
@@ -28,6 +28,8 @@ type Limiter struct {
 	global   *bucket
 	freeCost float64
 	now      Clock
+	// lastSweep throttles map sweeps to ~1/min under a distinct-ID flood.
+	lastSweep time.Time
 }
 
 type bucket struct {
@@ -93,21 +95,29 @@ func (l *Limiter) usersLen() int {
 	return len(l.users)
 }
 
-// Allow consumes cost tokens (1 normal, freeCost for free channels) from the
+// Cost returns the token price of one message on the given channel kind:
+// DefaultFreeCost for free-response channels, 1 otherwise. Allow and the
+// quota replies share it so the belt never disagrees with the gate.
+func (l *Limiter) Cost(freeChannel bool) float64 {
+	if freeChannel {
+		return l.freeCost
+	}
+	return 1
+}
+
+// Allow consumes Cost tokens (1 normal, freeCost for free channels) from the
 // caller's bucket and the global bucket. Thread follow-ups share the caller
 // bucket: key must be the author ID, never the thread ID. Returns ok and the
 // retry-after ETA on denial.
 func (l *Limiter) Allow(key string, freeChannel bool) (ok bool, retryAfter time.Duration) {
-	cost := 1.0
-	if freeChannel {
-		cost = l.freeCost
-	}
+	cost := l.Cost(freeChannel)
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	t := l.now()
 	l.refill(l.global, l.perMin*globalMultiplier, l.perMin*globalMultiplier, t)
-	if len(l.users) > sweepTrigger {
+	if len(l.users) > sweepTrigger && t.Sub(l.lastSweep) > time.Minute {
 		l.sweep(t)
+		l.lastSweep = t
 	}
 	b, ok := l.users[key]
 	if !ok {
@@ -152,24 +162,32 @@ func (l *Limiter) State(key string, cost float64) (msgs int, reset time.Time) {
 	defer l.mu.Unlock()
 	t := l.now()
 	l.refill(l.global, l.perMin*globalMultiplier, l.perMin*globalMultiplier, t)
-	// Scarcer bucket binds. A fresh caller counts as a full personal
-	// bucket at burst; a drained global still gates them.
-	tok, rate := l.global.tokens, l.perMin*globalMultiplier
+	// Both buckets bind independently. A fresh caller counts as a full
+	// personal bucket at burst; a drained global still gates them.
+	userTok, userRate := l.burst, l.perMin
 	if b, ok := l.users[key]; ok {
 		l.refill(b, l.perMin, l.burst, t)
-		if b.tokens < tok {
-			tok, rate = b.tokens, l.perMin
-		}
-	} else if l.burst < tok {
-		tok, rate = l.burst, l.perMin
+		userTok = b.tokens
 	}
-	if tok < 0 {
-		tok = 0
+	globTok := l.global.tokens
+	min := userTok
+	if globTok < min {
+		min = globTok
 	}
-	if tok >= cost {
-		return int(tok / cost), t
+	if min < 0 {
+		min = 0
 	}
-	return 0, l.nextToken(t, tok, cost, rate)
+	if min >= cost {
+		return int(min / cost), t
+	}
+	// True wait is the max across both buckets (mirroring Allow's max
+	// logic): one bucket's ETA alone under-reports when the other binds
+	// harder (e.g. user 0.5 vs global 0 at 4x rate).
+	eta := l.nextToken(t, userTok, cost, userRate)
+	if other := l.nextToken(t, globTok, cost, l.perMin*globalMultiplier); other.After(eta) {
+		eta = other
+	}
+	return 0, eta
 }
 
 // nextToken returns when need tokens accrue from tok at rate/min, floored at

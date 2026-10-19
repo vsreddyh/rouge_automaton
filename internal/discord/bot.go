@@ -178,10 +178,7 @@ func (b *Bot) cooldownReply(userID string, freeChannel bool) string {
 	if b.Limiter == nil {
 		return "Rounds to spare, Helldiver — belt reads full. Over."
 	}
-	cost := 1.0
-	if freeChannel {
-		cost = ratelimit.DefaultFreeCost
-	}
+	cost := b.Limiter.Cost(freeChannel)
 	msgs, reset := b.Limiter.State(userID, cost)
 	if msgs <= 0 {
 		eta := time.Until(reset).Round(time.Second)
@@ -198,7 +195,12 @@ func (b *Bot) cooldownReply(userID string, freeChannel bool) string {
 // model path and the cheap command/deny paths so behavior never diverges.
 func (b *Bot) sendReply(s *discordgo.Session, m *discordgo.MessageCreate, ch *discordgo.Channel, replyChannel, reply string) {
 	if replyChannel == m.ChannelID {
-		if sent, err := s.ChannelMessageSendReply(m.ChannelID, reply, m.Reference()); err == nil && sent != nil && ch != nil && ch.IsThread() {
+		sent, err := s.ChannelMessageSendReply(m.ChannelID, reply, m.Reference())
+		if err != nil {
+			log.Printf("discord: reply failed in %s: %v", m.ChannelID, err)
+			return
+		}
+		if sent != nil && ch != nil && ch.IsThread() {
 			// Spoke in a thread: it is a live session from here on.
 			b.threads.add(ch.ID)
 		}

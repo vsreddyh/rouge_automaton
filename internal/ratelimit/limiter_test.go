@@ -117,16 +117,40 @@ func TestStateFreshMinWithGlobal(t *testing.T) {
 }
 
 func TestStateCost(t *testing.T) {
-	clk, _ := testClock()
+	clk, tp := testClock()
 	l := New(60, 3, 2, clk)
 	if msgs, _ := l.State("u", 2); msgs != 1 {
 		t.Fatalf("3 tokens at cost 2 = 1 msg, got %d", msgs)
 	}
-	if msgs, reset := l.State("u", 1000); msgs != 0 || !reset.After(time.Now()) {
+	if msgs, reset := l.State("u", 1000); msgs != 0 || !reset.After(*tp) {
 		t.Fatalf("unaffordable cost must report 0 with future ETA: %d/%v", msgs, reset)
 	}
 	if msgs, _ := l.State("u", 0); msgs != 3 {
 		t.Fatalf("non-positive cost normalizes to 1, got %d", msgs)
+	}
+}
+
+func TestStateMaxEta(t *testing.T) {
+	clk, tp := testClock()
+	l := New(2, 10, 2, clk) // user refills 2/min, global 8/min
+	_, _ = l.Allow("u", false)
+	// Drain the user bucket by hand; global stays full. ETA must come from
+	// the user bucket (~15s), not the faster global rate.
+	l.mu.Lock()
+	l.users["u"].tokens = 0.5
+	l.mu.Unlock()
+	_, reset := l.State("u", 1)
+	if eta := reset.Sub(*tp); eta < 12*time.Second || eta > 18*time.Second {
+		t.Fatalf("user-bound ETA must be ~15s, got %v", eta)
+	}
+	// Flip it: full user bucket, dry global. ETA must come from global.
+	l.mu.Lock()
+	l.users["u"].tokens = 10
+	l.global.tokens = 0
+	l.mu.Unlock()
+	_, reset = l.State("u", 1)
+	if eta := reset.Sub(*tp); eta < 5*time.Second || eta > 10*time.Second {
+		t.Fatalf("global-bound ETA must be ~7.5s, got %v", eta)
 	}
 }
 
