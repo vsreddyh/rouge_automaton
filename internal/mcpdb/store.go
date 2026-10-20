@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
@@ -93,6 +94,18 @@ func strList(m bson.M, key string) []string {
 		for _, d := range v {
 			for _, e := range d {
 				add(ToString(e.Value))
+			}
+		}
+	case []bson.M:
+		for _, m := range v {
+			for _, e := range m {
+				add(ToString(e))
+			}
+		}
+	case []map[string]any:
+		for _, m := range v {
+			for _, e := range m {
+				add(ToString(e))
 			}
 		}
 	case bson.M:
@@ -254,28 +267,48 @@ func byName(docs []bson.M) {
 	sort.SliceStable(docs, func(i, j int) bool { return normalize(docName(docs[i])) < normalize(docName(docs[j])) })
 }
 
+// fetchAll runs one bounded fetch per collection concurrently and returns
+// the shelves in colls order, each sorted by normalized name. Same
+// exact-match semantics as the serial loop, minus the stacked round-trip
+// latency; scan order (and the units-first tie-break) is unchanged because
+// callers iterate the returned shelves in order. mongo.Database is
+// goroutine-safe, and each goroutine writes only its own shard.
+func fetchAll(ctx context.Context, db *mongo.Database, colls []string, filter bson.M, limit int64) [][]bson.M {
+	shards := make([][]bson.M, len(colls))
+	var wg sync.WaitGroup
+	for i, coll := range colls {
+		wg.Add(1)
+		go func(i int, coll string) {
+			defer wg.Done()
+			docs := findAll(ctx, db, coll, filter, limit)
+			byName(docs)
+			shards[i] = docs
+		}(i, coll)
+	}
+	wg.Wait()
+	return shards
+}
+
 // GetUnit fetches one enemy unit or structure by exact name or alias
 // (case-insensitive), searching units then structures. Returns the doc, the
 // collection that held it, and whether it was found.
 //
-// Small-scale scan by design: at ~900 docs a bounded per-collection fetch
-// plus Go exact-match is deterministic and keeps alias resolution in one
-// place. The unique (faction, name) indexes from ingest enforce identity;
-// they are not the lookup path.
+// Small-scale scan by design: at ~900 docs bounded per-collection fetches
+// (concurrent) plus Go exact-match is deterministic and keeps alias
+// resolution in one place. The unique (faction, name) indexes from ingest
+// enforce identity; they are not the lookup path.
 func GetUnit(ctx context.Context, db *mongo.Database, name string) (bson.M, string, bool) {
 	if normalize(name) == "" || db == nil {
 		return nil, "", false
 	}
-	for _, coll := range UnitCollections {
-		docs := findAll(ctx, db, coll, bson.M{}, fetchCap)
-		// Deterministic tie-break: each shelf scans in name order and
-		// shelves in UnitCollections order, so units win ties over
-		// structures. Deterministic is the contract; units-first is the
-		// documented precedence.
-		byName(docs)
+	// Deterministic tie-break: shelves scan in UnitCollections order with
+	// each shelf in name order, so units win ties over structures.
+	// Deterministic is the contract; units-first is the documented
+	// precedence.
+	for i, docs := range fetchAll(ctx, db, UnitCollections, bson.M{}, fetchCap) {
 		for _, d := range docs {
 			if isExactMatch(d, name) {
-				return d, coll, true
+				return d, UnitCollections[i], true
 			}
 		}
 	}
@@ -292,8 +325,8 @@ func ListUnits(ctx context.Context, db *mongo.Database, faction, role string, li
 		return nil
 	}
 	var docs []bson.M
-	for _, coll := range UnitCollections {
-		docs = append(docs, findAll(ctx, db, coll, bson.M{}, fetchCap)...)
+	for _, shard := range fetchAll(ctx, db, UnitCollections, bson.M{}, fetchCap) {
+		docs = append(docs, shard...)
 	}
 	out := FilterUnits(docs, faction, role)
 	byName(out)
@@ -308,14 +341,12 @@ func GetGear(ctx context.Context, db *mongo.Database, name string) (bson.M, stri
 	if normalize(name) == "" || db == nil {
 		return nil, "", false
 	}
-	for _, coll := range GearCollections {
-		docs := findAll(ctx, db, coll, bson.M{}, fetchCap)
-		// Same deterministic tie-break as GetUnit: name order within the
-		// shelf, shelves in GearCollections order.
-		byName(docs)
+	// Same deterministic tie-break as GetUnit: name order within the
+	// shelf, shelves in GearCollections order.
+	for i, docs := range fetchAll(ctx, db, GearCollections, bson.M{}, fetchCap) {
 		for _, d := range docs {
 			if isExactMatch(d, name) {
-				return d, coll, true
+				return d, GearCollections[i], true
 			}
 		}
 	}
@@ -344,14 +375,12 @@ func GetPlace(ctx context.Context, db *mongo.Database, name string) (bson.M, str
 	if normalize(name) == "" || db == nil {
 		return nil, "", false
 	}
-	for _, coll := range PlaceCollections {
-		docs := findAll(ctx, db, coll, bson.M{}, fetchCap)
-		// Same deterministic tie-break as GetUnit: name order within the
-		// shelf, shelves in PlaceCollections order.
-		byName(docs)
+	// Same deterministic tie-break as GetUnit: name order within the
+	// shelf, shelves in PlaceCollections order.
+	for i, docs := range fetchAll(ctx, db, PlaceCollections, bson.M{}, fetchCap) {
 		for _, d := range docs {
 			if isExactMatch(d, name) {
-				return d, coll, true
+				return d, PlaceCollections[i], true
 			}
 		}
 	}

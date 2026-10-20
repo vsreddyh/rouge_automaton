@@ -50,9 +50,14 @@ type dataFile struct {
 }
 
 func main() {
+	mongoURI := flag.String("mongo", os.Getenv("MONGO_URI"), "MongoDB URI")
+	dataDir := flag.String("data", "skills/rouge-automaton/data", "seed JSON dir")
+	flag.Parse()
+	// run() takes plain values (not flags) so a second in-process call can
+	// never panic on flag redefinition; only main touches flag state.
 	// run() returns errors instead of calling log.Fatalf so deferred
 	// cleanup (mongo Disconnect) always executes; only main may exit.
-	if err := run(); err != nil {
+	if err := run(*mongoURI, *dataDir); err != nil {
 		log.Fatalf("ingest: %v", err)
 	}
 }
@@ -110,18 +115,15 @@ func ensureIndexes(ctx context.Context, db *mongo.Database) error {
 	return nil
 }
 
-func run() error {
-	mongoURI := flag.String("mongo", os.Getenv("MONGO_URI"), "MongoDB URI")
-	dataDir := flag.String("data", "skills/rouge-automaton/data", "seed JSON dir")
-	flag.Parse()
-	if *mongoURI == "" {
-		*mongoURI = "mongodb://localhost:27017/rouge"
+func run(mongoURI, dataDir string) error {
+	if mongoURI == "" {
+		mongoURI = "mongodb://localhost:27017/rouge"
 	}
-	files, err := filepath.Glob(filepath.Join(*dataDir, "*.json"))
+	files, err := filepath.Glob(filepath.Join(dataDir, "*.json"))
 	if err != nil || len(files) == 0 {
-		return fmt.Errorf("no seed files in %s", *dataDir)
+		return fmt.Errorf("no seed files in %s", dataDir)
 	}
-	client, err := mongo.Connect(options.Client().ApplyURI(*mongoURI))
+	client, err := mongo.Connect(options.Client().ApplyURI(mongoURI))
 	if err != nil {
 		return err
 	}
@@ -131,7 +133,7 @@ func run() error {
 	if err := client.Ping(pingCtx, readpref.Primary()); err != nil {
 		return fmt.Errorf("mongo ping: %w", err)
 	}
-	db := client.Database(config.Config{MongoURI: *mongoURI}.DBName())
+	db := client.Database(config.Config{MongoURI: mongoURI}.DBName())
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	if err := ensureIndexes(ctx, db); err != nil {
