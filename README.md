@@ -60,7 +60,8 @@ podman run --rm --network=host -e MONGO_URI=mongodb://127.0.0.1:27017/rouge \
 ## Discord behavior
 
 - Mention-gated replies (`require_mention: true`), `auto_thread: true`: a mention opens a thread and the answer lands inside it — follow-ups in threads the bot opened or has spoken in answer without a fresh mention (same relay session, keyed by thread ID). Strangers' threads still need a mention. Outside threads, a mention is required; configured free-response channels answer without a mention (each costs a model call — keep the list short).
-- Greetings (`hi`/`hello`/`hey`, also `yo`/`o7`): answered by the model in voice, whatever fits the moment — no canned line, no helpdesk menu.
+- Greetings (`hi`/`hello`/`hey`, also `yo`/`o7`): answered by the model in voice, whatever fits the moment — no canned line, no helpdesk menu, no "state target".
+- War-status questions (`what's the war status`, `how goes the front`) get a live summary of active fronts — no planet name required.
 - Every intel answer: weak point + counter + source (Mongo doc or live link).
 
 ## Answer pipeline
@@ -68,9 +69,10 @@ podman run --rm --network=host -e MONGO_URI=mongodb://127.0.0.1:27017/rouge \
 1. Identity questions → answer from `SOUL.md` canon. Serial stays `[REDACTED]`.
 2. Factual questions → the model calls search tools itself (no code router):
    `search_units` (weak points, counters, anatomy), `search_gear` (loadouts),
-   `search_world` (biomes, planets, missions), `planet_status` (live war
-   data). Candidates rank by keyword overlap + name/alias bonus; every
-   answer cites its source.
+   `search_world` (biomes, planets, missions), `war_status` (generic live war
+   summary: active fronts per faction, hottest battles, divers deployed),
+   `planet_status` (one named planet's live data). Candidates rank by keyword
+   overlap + name/alias bonus; every answer cites its source.
 3. Miss → the model falls back to `wiki_search` (`helldivers.wiki.gg`),
    summarized with links. Unknowns are reported as unconfirmed, not invented.
 4. Rate limit (`429`) → exact reply: `The Lost Son is busy spreading democracy on Cyberstan. Hold position, Helldiver — try again shortly. Estimated time of liberation: {n}s.` Other backend failures → `Uplink dead. No fallback. For Super Earth, try later.`
