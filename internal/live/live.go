@@ -309,6 +309,9 @@ func num(m map[string]any, key string) float64 {
 	// 0 and every defense misclassifies as campaign.
 	switch v := m[key].(type) {
 	case float64:
+		if math.IsNaN(v) || math.IsInf(v, 0) {
+			return 0
+		}
 		return v
 	case float32:
 		return float64(v)
