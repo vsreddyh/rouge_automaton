@@ -128,6 +128,13 @@ func TestFormatFull(t *testing.T) {
 	if got := FormatFull(bson.M{"name": "X", "health": "1,800"}); !strings.Contains(got, "health 1,800") {
 		t.Fatalf("comma-grouped health must pass through, got %q", got)
 	}
+	if got := FormatFull(bson.M{"name": "X", "health": " 100 "}); !strings.Contains(got, "health 100") {
+		t.Fatalf("padded health must trim and render, got %q", got)
+	}
+	rawMapAnatomy := bson.M{"name": "Hulk", "anatomy": []map[string]any{{"part": "Vent"}}}
+	if got := FormatFull(rawMapAnatomy); !strings.Contains(got, "Vent") {
+		t.Fatalf("[]map[string]any anatomy must render, got %q", got)
+	}
 	// Newline keys flatten too — a wiki infobox key must never forge a
 	// second cited line (review r4).
 	nlKey := bson.M{"name": "Mortar", "params": bson.M{"da\nmage": 120}}

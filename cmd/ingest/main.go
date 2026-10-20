@@ -146,7 +146,21 @@ func run() error {
 				}
 				var al []string
 				for _, e := range raw {
-					if s, ok := e.(string); ok && s != "" {
+					// Coerce every writer shape (numerics included) and
+					// trim: covered() matches on trimmed toks, so an
+					// untrimmed alias would silently miss.
+					var s string
+					switch t := e.(type) {
+					case string:
+						s = t
+					case int, int8, int16, int32, int64,
+						uint, uint8, uint16, uint32, uint64,
+						float32, float64:
+						s = fmt.Sprint(t)
+					default:
+						continue
+					}
+					if s = strings.TrimSpace(s); s != "" {
 						al = append(al, strings.ToLower(s))
 					}
 				}

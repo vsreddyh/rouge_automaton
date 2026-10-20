@@ -470,7 +470,7 @@ func healthOf(d bson.M) string {
 	if _, ok := d["health"].(bool); ok {
 		return ""
 	}
-	h := toString(d["health"])
+	h := strings.TrimSpace(toString(d["health"]))
 	if h == "" {
 		return ""
 	}
@@ -503,6 +503,11 @@ func anatomySummary(d bson.M) string {
 		for i, e := range v {
 			rows[i] = e
 		}
+	case []map[string]any:
+		rows = make([]any, len(v))
+		for i, e := range v {
+			rows[i] = e
+		}
 	default:
 		return ""
 	}
@@ -514,6 +519,11 @@ func anatomySummary(d bson.M) string {
 			m = map[string]any(t)
 		case map[string]any:
 			m = t
+		case bson.D:
+			m = map[string]any{}
+			for _, f := range t {
+				m[f.Key] = f.Value
+			}
 		default:
 			continue
 		}
