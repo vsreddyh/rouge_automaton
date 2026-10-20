@@ -433,7 +433,7 @@ func (c *Client) ChatWithTools(ctx context.Context, system, query string, histor
 			input = append(input, json.RawMessage(call.Raw))
 			input = append(input, map[string]any{
 				"type":    "function_call_output",
-				"call_id": call.CallID, "output": capToolOutput(call.Name, out),
+				"call_id": call.CallID, "output": capToolOutput(out),
 			})
 		}
 	}
@@ -454,7 +454,7 @@ const maxToolOutputRunes = 2000
 
 // capToolOutput truncates overlong tool results to maxToolOutputRunes
 // (rune-safe). Short results pass through untouched.
-func capToolOutput(name, out string) string {
+func capToolOutput(out string) string {
 	if r := []rune(out); len(r) > maxToolOutputRunes {
 		return string(r[:maxToolOutputRunes]) + "…[tool output truncated]"
 	}
