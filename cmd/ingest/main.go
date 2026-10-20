@@ -161,52 +161,17 @@ func run(mongoURI, dataDir string) error {
 		for _, d := range found {
 			// Names and aliases coerce through the same ToString gate the
 			// store renders and matches with, so a non-string field can
-			// never silently dodge coverage.
+			// never silently dodge coverage. Values is the single
+			// shape-switch behind both this loader and query-time
+			// strList, so the two sides cannot disagree.
 			name := mcpdb.ToString(d["name"])
 			if name == "" {
 				continue
 			}
-			// Alias fields come in every writer shape (bson.A from
-			// mongo, []any/[]string from JSON decodes, lone strings,
-			// documents); ToString coerces every scalar shape.
-			var raw []any
-			switch a := d["aliases"].(type) {
-			case bson.A:
-				raw = []any(a)
-			case []any:
-				raw = a
-			case []string:
-				raw = make([]any, len(a))
-				for i, s := range a {
-					raw[i] = s
-				}
-			case json.Number:
-				raw = []any{string(a)}
-			case string:
-				raw = []any{a}
-			case bson.D:
-				for _, e := range a {
-					raw = append(raw, e.Value)
-				}
-			case []bson.D:
-				for _, d := range a {
-					for _, e := range d {
-						raw = append(raw, e.Value)
-					}
-				}
-			case bson.M:
-				for _, e := range a {
-					raw = append(raw, e)
-				}
-			case map[string]any:
-				for _, e := range a {
-					raw = append(raw, e)
-				}
-			}
 			var al []string
-			for _, e := range raw {
-				if s := mcpdb.ToString(e); s != "" {
-					al = append(al, strings.ToLower(strings.TrimSpace(s)))
+			for _, s := range mcpdb.Values(d["aliases"]) {
+				if s = strings.TrimSpace(s); s != "" {
+					al = append(al, strings.ToLower(s))
 				}
 			}
 			known[strings.ToLower(strings.TrimSpace(name))] = al

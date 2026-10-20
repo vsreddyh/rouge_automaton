@@ -56,75 +56,72 @@ func flat(s string) string {
 	return strings.ReplaceAll(s, "\n", " ")
 }
 
-// strList reads a doc field that may be stored as a BSON array, a Go slice,
-// a generic decoded slice, or a lone string, always returning a slice. Docs
-// come from two writers (seed ingest and wiki crawl) with slightly different
-// shapes, so callers must not assume one representation.
-func strList(m bson.M, key string) []string {
+// Values coerces a value in any writer shape to strings: BSON arrays, Go
+// slices, singletons, documents (values), and arrays of documents all
+// flatten to one list. The single shape-switch behind both strList
+// (query-time) and ingest's loadKnown (seed-time), so the two sides can
+// never disagree on what an alias field holds.
+func Values(v any) []string {
 	var out []string
-	add := func(s string) {
-		if s != "" {
-			out = append(out, flat(s))
+	add := func(e any) {
+		if s := ToString(e); s != "" {
+			out = append(out, s)
 		}
 	}
-	switch v := m[key].(type) {
+	switch t := v.(type) {
 	case bson.A:
-		for _, e := range v {
-			if s := ToString(e); s != "" {
-				out = append(out, s)
-			}
+		for _, e := range t {
+			add(e)
 		}
 	case []any:
-		for _, e := range v {
-			if s := ToString(e); s != "" {
-				out = append(out, s)
-			}
+		for _, e := range t {
+			add(e)
 		}
 	case []string:
-		for _, s := range v {
-			add(s)
+		for _, e := range t {
+			add(e)
 		}
 	case bson.D:
-		// A document-shaped field contributes its values.
-		for _, e := range v {
-			add(ToString(e.Value))
+		for _, e := range t {
+			add(e.Value)
 		}
 	case []bson.D:
-		// An array of documents contributes every value.
-		for _, d := range v {
+		for _, d := range t {
 			for _, e := range d {
-				add(ToString(e.Value))
-			}
-		}
-	case []bson.M:
-		for _, m := range v {
-			for _, e := range m {
-				add(ToString(e))
-			}
-		}
-	case []map[string]any:
-		for _, m := range v {
-			for _, e := range m {
-				add(ToString(e))
+				add(e.Value)
 			}
 		}
 	case bson.M:
-		// A map-shaped field contributes its values.
-		for _, e := range v {
-			add(ToString(e))
+		for _, e := range t {
+			add(e)
 		}
 	case map[string]any:
-		for _, e := range v {
-			add(ToString(e))
+		for _, e := range t {
+			add(e)
 		}
-	case string:
-		add(v)
+	case []bson.M:
+		for _, m := range t {
+			for _, e := range m {
+				add(e)
+			}
+		}
+	case []map[string]any:
+		for _, m := range t {
+			for _, e := range m {
+				add(e)
+			}
+		}
 	default:
-		// Any other scalar (numeric, bool, json.Number) coerces exactly
-		// like ingest's loadKnown, so seed-time and query-time agree.
-		add(ToString(m[key]))
+		add(v)
 	}
 	return out
+}
+
+// strList reads a doc field in any writer shape via the shared Values
+// switch. Docs come from two writers (seed ingest and wiki crawl) with
+// slightly different shapes, so callers must not assume one representation.
+func strList(m bson.M, key string) []string {
+	return Values(m[key])
 }
 
 // docName returns a doc's display name, falling back to "?" so a malformed

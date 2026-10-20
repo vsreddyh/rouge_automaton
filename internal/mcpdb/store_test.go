@@ -7,6 +7,33 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
+// TestValuesShapes pins the single shape-switch behind strList and
+// ingest's loadKnown: every writer shape coerces identically.
+func TestValuesShapes(t *testing.T) {
+	cases := []struct {
+		in   any
+		want []string
+	}{
+		{bson.A{"a", 1}, []string{"a", "1"}},
+		{[]any{"b"}, []string{"b"}},
+		{[]string{"c"}, []string{"c"}},
+		{"d", []string{"d"}},
+		{42, []string{"42"}},
+		{nil, nil},
+		{bson.D{{Key: "k", Value: "v"}}, []string{"v"}},
+		{[]bson.D{{{Key: "k", Value: "v"}}}, []string{"v"}},
+		{bson.M{"k": "v"}, []string{"v"}},
+		{map[string]any{"k": "v"}, []string{"v"}},
+		{[]bson.M{{"k": "v"}}, []string{"v"}},
+		{[]map[string]any{{"k": "v"}}, []string{"v"}},
+	}
+	for _, tc := range cases {
+		if got, want := strings.Join(Values(tc.in), ","), strings.Join(tc.want, ","); got != want {
+			t.Fatalf("Values(%v) = %q, want %q", tc.in, got, want)
+		}
+	}
+}
+
 // The router is gone by design (the model decides what to look up), so the
 // tests pin the two remaining contracts: the faction/category allowlists and
 // exact alias-resolved matching.
