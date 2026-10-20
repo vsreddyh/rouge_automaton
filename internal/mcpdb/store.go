@@ -371,12 +371,20 @@ func cut(s string, n int) string {
 
 // docSource renders a doc's provenance for citations: source_url wins, then
 // source, then the mongo fallback so every line stays citable.
+// noBrackets strips citation-marker brackets from values rendered inside
+// [...] markers (source lines, faction tags): a ] inside the value would
+// truncate the persona.sourceRe capture that cites the answer.
+func noBrackets(s string) string {
+	s = strings.ReplaceAll(s, "[", " ")
+	return strings.ReplaceAll(s, "]", " ")
+}
+
 func docSource(d bson.M) string {
 	if src := ToString(d["source_url"]); src != "" {
-		return src
+		return noBrackets(src)
 	}
 	if s := ToString(d["source"]); s != "" {
-		return s
+		return noBrackets(s)
 	}
 	return "mongo"
 }
@@ -455,7 +463,7 @@ func FormatFull(d bson.M) string {
 	}
 	line := "- " + docName(d)
 	if f := ToString(d["faction"]); f != "" {
-		line += " [" + f + "]"
+		line += " [" + noBrackets(f) + "]"
 	}
 	if role != "" {
 		line += ": " + cut(role, 300)

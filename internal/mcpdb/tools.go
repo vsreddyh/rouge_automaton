@@ -253,8 +253,9 @@ func intArg(args map[string]any, key string, def int) int {
 	}
 	if f, err := strconv.ParseFloat(strings.ReplaceAll(s, ",", ""), 64); err == nil {
 		// int(f) is implementation-defined on NaN/Inf/out-of-range, and
-		// the later clamp cannot save it — range-check first.
-		if math.IsNaN(f) || math.IsInf(f, 0) || f >= 1<<63 || f < -(1<<63) {
+		// the later clamp cannot save it — range-check against the
+		// platform int first (1<<63 would still overflow a 32-bit int).
+		if math.IsNaN(f) || math.IsInf(f, 0) || f >= float64(math.MaxInt) || f < float64(math.MinInt) {
 			return def
 		}
 		return int(f)

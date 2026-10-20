@@ -158,6 +158,12 @@ func TestFormatFull(t *testing.T) {
 	if got := FormatFull(numSrc); !strings.Contains(got, "[source: 123]") {
 		t.Fatalf("numeric source must render, got %q", got)
 	}
+	// Brackets inside values must not break the [source:] citation contract.
+	brk := bson.M{"name": "X", "faction": "bots]", "source": "a]b"}
+	if got := FormatFull(brk); strings.Contains(got, "bots]") || strings.Contains(got, "a]b") ||
+		!strings.Contains(got, "[source: a b]") {
+		t.Fatalf("brackets must not leak into markers, got %q", got)
+	}
 	// Roster lines cap both segments so one long doc cannot blow the page.
 	big := bson.M{"name": "X", "weak_points": bson.A{strings.Repeat("x", 500)},
 		"counters": bson.A{strings.Repeat("y", 500)}}
