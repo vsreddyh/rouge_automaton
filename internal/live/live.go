@@ -346,13 +346,10 @@ func num(m map[string]any, key string) float64 {
 }
 
 // parseEndTime parses the war API's endTime, which may carry fractional
-// seconds: RFC3339Nano first, plain RFC3339 as fallback, so the date never
-// silently drops on a millis timestamp.
+// seconds: a single RFC3339Nano parse covers both shapes (the fractional
+// part is optional), so the date never silently drops on a millis timestamp.
 func parseEndTime(s string) (time.Time, bool) {
-	if t, err := time.Parse(time.RFC3339Nano, s); err == nil {
-		return t, true
-	}
-	t, err := time.Parse(time.RFC3339, s)
+	t, err := time.Parse(time.RFC3339Nano, s)
 	return t, err == nil
 }
 
