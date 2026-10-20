@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/vsreddyh/rouge_automaton/internal/ratelimit"
+	"rouge_automaton/internal/ratelimit"
 )
 
 // isStatus reports whether q invokes the status command: /status or

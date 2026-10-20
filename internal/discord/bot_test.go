@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vsreddyh/rouge_automaton/internal/config"
-	"github.com/vsreddyh/rouge_automaton/internal/ratelimit"
+	"rouge_automaton/internal/config"
+	"rouge_automaton/internal/ratelimit"
 )
 
 // gatePass must admit exactly the intended matrix: open mode admits all,

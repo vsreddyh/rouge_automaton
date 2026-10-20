@@ -9,7 +9,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	souldata "github.com/vsreddyh/rouge_automaton"
+	souldata "rouge_automaton"
 )
 
 // Suffix is the rules block appended verbatim to every system prompt.

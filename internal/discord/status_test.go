@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vsreddyh/rouge_automaton/internal/ratelimit"
+	"rouge_automaton/internal/ratelimit"
 )
 
 type fakeProber struct{ model, mongo string }

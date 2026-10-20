@@ -15,11 +15,11 @@ import (
 	"github.com/bwmarrin/discordgo"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 
-	"github.com/vsreddyh/rouge_automaton/internal/config"
-	"github.com/vsreddyh/rouge_automaton/internal/gorelay"
-	"github.com/vsreddyh/rouge_automaton/internal/mcpdb"
-	"github.com/vsreddyh/rouge_automaton/internal/persona"
-	"github.com/vsreddyh/rouge_automaton/internal/ratelimit"
+	"rouge_automaton/internal/config"
+	"rouge_automaton/internal/gorelay"
+	"rouge_automaton/internal/mcpdb"
+	"rouge_automaton/internal/persona"
+	"rouge_automaton/internal/ratelimit"
 )
 
 // Bot holds gateway dependencies: the model client (Relay) and the tool

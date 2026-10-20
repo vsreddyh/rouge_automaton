@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/vsreddyh/rouge_automaton/internal/config"
+	"rouge_automaton/internal/config"
 )
 
 // Client queries the war API. Mirrors bot/live.py cache semantics.

@@ -12,10 +12,10 @@ import (
 
 	"go.mongodb.org/mongo-driver/v2/mongo"
 
-	"github.com/vsreddyh/rouge_automaton/internal/config"
-	"github.com/vsreddyh/rouge_automaton/internal/gorelay"
-	"github.com/vsreddyh/rouge_automaton/internal/live"
-	"github.com/vsreddyh/rouge_automaton/internal/wiki"
+	"rouge_automaton/internal/config"
+	"rouge_automaton/internal/gorelay"
+	"rouge_automaton/internal/live"
+	"rouge_automaton/internal/wiki"
 )
 
 // ToolGuidance is appended to the system prompt so the model knows it must
