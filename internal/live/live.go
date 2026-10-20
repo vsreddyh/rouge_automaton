@@ -36,7 +36,7 @@ type Client struct {
 
 // New builds a Client from the bot config.
 func New(cfg config.Config) *Client {
-	return &Client{Base: strings.TrimSuffix(cfg.HD2APIBase, "/"), Contact: cfg.XSuperContact, Client: cfg.XSuperClient}
+	return &Client{Base: cfg.HD2APIBase, Contact: cfg.XSuperContact, Client: cfg.XSuperClient}
 }
 func (c *Client) http() *http.Client {
 	if c.HTTP != nil {
@@ -69,7 +69,9 @@ func (c *Client) planets(ctx context.Context) []map[string]any {
 		return fresh
 	}
 	c.mu.Lock()
-	c.retry = time.Now().Add(30 * time.Second)
+	if ctx.Err() == nil {
+		c.retry = time.Now().Add(30 * time.Second)
+	}
 	c.mu.Unlock()
 	return cached
 }
@@ -113,12 +115,15 @@ func fetchBody(ctx context.Context, client *http.Client, url, superClient, conta
 func (c *Client) refresh(ctx context.Context) []map[string]any {
 	bodies := make([][]byte, len(htmPaths))
 	errs := make([]error, len(htmPaths))
+	// Trim here (not in New) so direct &Client{Base: ...} literals,
+	// as in tests, get the same normalization, however many slashes.
+	base := strings.TrimRight(c.Base, "/")
 	var wg sync.WaitGroup
 	for i, p := range htmPaths {
 		wg.Add(1)
 		go func(i int, p string) {
 			defer wg.Done()
-			body, err := fetchBody(ctx, c.http(), c.Base+p, c.Client, c.Contact)
+			body, err := fetchBody(ctx, c.http(), base+p, c.Client, c.Contact)
 			bodies[i], errs[i] = body, err
 		}(i, p)
 	}
