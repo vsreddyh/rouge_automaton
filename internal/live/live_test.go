@@ -24,7 +24,7 @@ type fixturePlanet struct {
 	eventHealth  float64
 	eventMax     float64
 	defense      bool
-	defenseRaw   any // non-nil overrides defense, e.g. a numeric 1 shape
+	defenseRaw   any     // non-nil overrides defense, e.g. a numeric 1 shape
 	expire       float64 // unix seconds, 0 = no expiry
 	nameless     bool    // no name-table entry: unaddressable, must be skipped
 }
