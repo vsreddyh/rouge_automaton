@@ -136,10 +136,9 @@ func (e *Executor) Execute(ctx context.Context, name, argsJSON string) string {
 		if e.Live == nil {
 			return "live war API not wired — report the uplink as down, never guess"
 		}
-		if line := e.Live.PlanetLine(ctx, strArg(args, "name")); line != "" {
+		if line, up := e.Live.PlanetLineUp(ctx, strArg(args, "name")); line != "" {
 			return line
-		}
-		if !e.Live.Up(ctx) {
+		} else if !up {
 			return "live war API unreachable — report the uplink as down, never guess a war status"
 		}
 		return "no live status for that planet — check the spelling or try wiki_search"

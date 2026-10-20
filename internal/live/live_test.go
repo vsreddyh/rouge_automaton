@@ -24,6 +24,7 @@ type fixturePlanet struct {
 	eventHealth  float64
 	eventMax     float64
 	defense      bool
+	defenseRaw   any // non-nil overrides defense, e.g. a numeric 1 shape
 	expire       float64 // unix seconds, 0 = no expiry
 	nameless     bool    // no name-table entry: unaddressable, must be skipped
 }
@@ -92,10 +93,14 @@ func servePlanets(t *testing.T, planets []fixturePlanet, total int) *httptest.Se
 			names[fmt.Sprint(p.index)] = map[string]any{"name": p.name}
 		}
 		if p.eventFaction != "" {
+			defense := any(p.defense)
+			if p.defenseRaw != nil {
+				defense = p.defenseRaw
+			}
 			camp := map[string]any{
 				"planetIndex": p.index, "name": p.name, "faction": p.eventFaction,
 				"players": p.players, "health": p.eventHealth, "maxHealth": p.eventMax,
-				"defense": p.defense,
+				"defense": defense,
 			}
 			if p.expire > 0 {
 				camp["expireDateTime"] = p.expire
@@ -295,6 +300,11 @@ func TestCacheSurvivesOutage(t *testing.T) {
 		t.Fatal("first call must hit")
 	}
 	srv.Close() // outage: cache must serve instead of failing
+	// Backdate past the 5-minute TTL so the second call exercises the
+	// refresh-fails-then-serve-cache path instead of short-circuiting.
+	c.mu.Lock()
+	c.at = time.Now().Add(-6 * time.Minute)
+	c.mu.Unlock()
 	if got := c.PlanetLine(context.Background(), "mintoria"); !strings.Contains(got, "Mintoria: Humans") {
 		t.Fatalf("cache must survive outage, got %q", got)
 	}
@@ -305,5 +315,57 @@ func TestNon200Empty(t *testing.T) {
 	c := newTestClient(srv)
 	if got := c.PlanetLine(context.Background(), "mintoria"); got != "" {
 		t.Fatalf("non-200 must not parse body: %q", got)
+	}
+}
+
+// TestNumericDefense pins isDefense against a non-bool shape: a 1 defense
+// flag must still classify DEFENSE instead of a campaign.
+func TestNumericDefense(t *testing.T) {
+	expire := float64(time.Date(2026, 9, 20, 13, 0, 56, 0, time.UTC).Unix())
+	srv := serveRoster(t, []fixturePlanet{
+		{index: 7, name: "FURY", owner: 1, health: 2000000, max: 2000000, players: 3100,
+			eventFaction: "Automaton", eventHealth: 1336106, eventMax: 1500000,
+			defenseRaw: 1, expire: expire},
+	})
+	c := newTestClient(srv)
+	if got := c.PlanetLine(context.Background(), "fury"); !strings.Contains(got, "DEFENSE vs Automaton") {
+		t.Fatalf("numeric defense must classify DEFENSE: %q", got)
+	}
+}
+
+// TestPlanetsArrayShape pins the name-table fallback: if the name endpoint
+// ever ships an array instead of the string-keyed object, the roster still
+// resolves instead of collapsing below the staleness floor.
+func TestPlanetsArrayShape(t *testing.T) {
+	const n = minRoster + 20
+	status := make([]map[string]any, 0, n)
+	infos := make([]map[string]any, 0, n)
+	names := make([]map[string]any, 0, n)
+	for i := 0; i < n; i++ {
+		players := 0.0
+		if i == 0 {
+			players = 5
+		}
+		status = append(status, map[string]any{"index": i, "owner": 1, "health": 1000000, "players": players})
+		infos = append(infos, map[string]any{"index": i, "maxHealth": 1000000})
+		names = append(names, map[string]any{"name": fmt.Sprintf("Filler %d", i)})
+	}
+	marshal := func(v any) string {
+		raw, err := json.Marshal(v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(raw)
+	}
+	srv := serveBodies(t, "[]",
+		marshal(map[string]any{"planetStatus": status}),
+		marshal(map[string]any{"planetInfos": infos}),
+		marshal(names), 200)
+	c := newTestClient(srv)
+	if !c.Up(context.Background()) {
+		t.Fatal("array name table must read as up")
+	}
+	if got := c.PlanetLine(context.Background(), "filler 7"); !strings.Contains(got, "Filler 7: Humans") {
+		t.Fatalf("array name table must resolve: %q", got)
 	}
 }

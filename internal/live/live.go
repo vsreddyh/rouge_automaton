@@ -116,7 +116,8 @@ func (c *Client) refresh(ctx context.Context) []map[string]any {
 		}
 	}
 	var campaign []map[string]any
-	var status, info, names map[string]any
+	var status, info map[string]any
+	var namesRaw any
 	if err := json.Unmarshal(bodies[0], &campaign); err != nil {
 		return nil
 	}
@@ -126,10 +127,56 @@ func (c *Client) refresh(ctx context.Context) []map[string]any {
 	if err := json.Unmarshal(bodies[2], &info); err != nil {
 		return nil
 	}
-	if err := json.Unmarshal(bodies[3], &names); err != nil {
+	if err := json.Unmarshal(bodies[3], &namesRaw); err != nil {
 		return nil
 	}
-	return joinRoster(campaign, status, info, names)
+	return joinRoster(campaign, status, info, nameTable(namesRaw))
+}
+
+// nameTable normalizes the planet name table to index->name: the API ships
+// a string-keyed object today, but an array shape (indexed by planet index)
+// degrades to the same table instead of collapsing the roster.
+func nameTable(raw any) map[string]string {
+	out := map[string]string{}
+	switch t := raw.(type) {
+	case map[string]any:
+		for k, v := range t {
+			switch n := v.(type) {
+			case map[string]any:
+				if s := str(n, "name"); s != "" {
+					out[k] = s
+				}
+			case string:
+				if strings.TrimSpace(n) != "" {
+					out[k] = n
+				}
+			}
+		}
+	case []any:
+		for i, v := range t {
+			switch n := v.(type) {
+			case map[string]any:
+				if s := str(n, "name"); s != "" {
+					out[strconv.Itoa(i)] = s
+				}
+			case string:
+				if strings.TrimSpace(n) != "" {
+					out[strconv.Itoa(i)] = n
+				}
+			}
+		}
+	}
+	return out
+}
+
+// isDefense reports whether a campaign entry is a defense: the API emits a
+// bool today, but a numeric-tolerant read keeps a 0/1 shape from
+// misclassifying into a campaign.
+func isDefense(m map[string]any) bool {
+	if defense, _ := m["defense"].(bool); defense {
+		return true
+	}
+	return num(m, "defense") == 1
 }
 
 // ownerLabel maps the official owner code to the display owner.
@@ -153,7 +200,7 @@ func ownerLabel(code int) string {
 // Returns nil when the payload looks stale (tiny roster or a galaxy with
 // zero divers) so the outage path keeps the cache instead of printing a
 // false dead galaxy.
-func joinRoster(campaign []map[string]any, status, info, names map[string]any) []map[string]any {
+func joinRoster(campaign []map[string]any, status, info map[string]any, names map[string]string) []map[string]any {
 	maxByIndex := map[int]float64{}
 	if list, ok := info["planetInfos"].([]any); ok {
 		for _, e := range list {
@@ -174,10 +221,7 @@ func joinRoster(campaign []map[string]any, status, info, names map[string]any) [
 			continue
 		}
 		idx := int(num(m, "index"))
-		name := ""
-		if nm, ok := names[strconv.Itoa(idx)].(map[string]any); ok {
-			name = str(nm, "name")
-		}
+		name := names[strconv.Itoa(idx)]
 		camp := campByIndex[idx]
 		if name == "" {
 			// New or unlisted index: the campaign entry still names it.
@@ -196,7 +240,7 @@ func joinRoster(campaign []map[string]any, status, info, names map[string]any) [
 		}
 		if camp != nil {
 			kind := 0.0
-			if defense, _ := camp["defense"].(bool); defense {
+			if isDefense(camp) {
 				kind = 1.0
 			}
 			ev := map[string]any{
@@ -276,7 +320,24 @@ func str(m map[string]any, key string) string {
 // while an attack event is live. Without an event it ends at "divers.".
 // Every return ends with "Over." so the model can quote it verbatim.
 func (c *Client) PlanetLine(ctx context.Context, name string) string {
-	for _, p := range c.planets(ctx) {
+	line, _ := c.PlanetLineUp(ctx, name)
+	return line
+}
+
+// PlanetLineUp returns the planet line and the uplink state in a single
+// fetch, so a miss costs one roster read, not two: a non-empty line is the
+// answer; an empty line with up=false means the uplink is down, while
+// up=true means the name is simply unknown.
+func (c *Client) PlanetLineUp(ctx context.Context, name string) (string, bool) {
+	plans := c.planets(ctx)
+	if len(plans) == 0 {
+		return "", false
+	}
+	return planetLine(plans, name), true
+}
+
+func planetLine(plans []map[string]any, name string) string {
+	for _, p := range plans {
 		n, _ := p["name"].(string)
 		if !strings.EqualFold(n, strings.TrimSpace(name)) {
 			continue
