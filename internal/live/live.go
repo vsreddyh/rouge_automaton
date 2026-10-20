@@ -226,9 +226,14 @@ func joinRoster(campaign []map[string]any, status, info map[string]any, names ma
 	maxByIndex := map[int]float64{}
 	if list, ok := info["planetInfos"].([]any); ok {
 		for _, e := range list {
-			if m, ok := e.(map[string]any); ok {
-				maxByIndex[int(num(m, "index"))] = num(m, "maxHealth")
+			m, ok := e.(map[string]any)
+			if !ok {
+				continue
 			}
+			if _, ok := m["index"]; !ok {
+				continue
+			}
+			maxByIndex[int(num(m, "index"))] = num(m, "maxHealth")
 		}
 	}
 	campByIndex := map[int]map[string]any{}
@@ -243,6 +248,9 @@ func joinRoster(campaign []map[string]any, status, info map[string]any, names ma
 	for _, e := range statusList {
 		m, ok := e.(map[string]any)
 		if !ok {
+			continue
+		}
+		if _, ok := m["index"]; !ok {
 			continue
 		}
 		idx := int(num(m, "index"))
@@ -314,6 +322,9 @@ func num(m map[string]any, key string) float64 {
 		}
 		return v
 	case float32:
+		if math.IsNaN(float64(v)) || math.IsInf(float64(v), 0) {
+			return 0
+		}
 		return float64(v)
 	case int:
 		return float64(v)
