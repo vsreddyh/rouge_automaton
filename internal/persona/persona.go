@@ -85,10 +85,10 @@ var (
 	// canon placeholder. An optional "number" bridges word-gap forms; the
 	// backstop errs toward redaction.
 	serialRe = regexp.MustCompile(`(?i)serial[:\s#\-]*(number[:\s#\-]*)?\d+`)
-	// toolCallRe strips leaked tool names with args ("search_units(Hulk)")
+	// toolCallRe strips leaked tool names with args ("get_unit(Hulk)")
 	// and bare ("planet_status"): the parens group is optional because the
 	// model sometimes narrates the name without arguments.
-	toolCallRe = regexp.MustCompile(`(?i)\b(search_units|search_gear|search_world|war_status|planet_status|wiki_search)\b(?:\s*\([^)]*\))?`)
+	toolCallRe = regexp.MustCompile(`(?i)\b(get_unit|list_units|get_gear|list_gear|get_place|war_status|planet_status|wiki_search)\b(?:\s*\([^)]*\))?`)
 	// funcMarkRe strips one leaked marker plus its ID token: "function_call",
 	// optionally followed by a digit-shaped ID ("function_call abc123") or a
 	// chained "call_id ..." pair, then "call_id"/"call id" the same way.
@@ -101,14 +101,14 @@ var (
 	// ("{front}") intact while key-less shapes still pass through.
 	jsonArgsRe = regexp.MustCompile(`\{[^{}]*"[^{}]*:[^{}]*\}`)
 	// narrateRe strips a narration line that holds nothing but the lookup
-	// ("Calling search_units now\n"): the tool token plus a short tail must
+	// ("Calling get_unit now\n"): the tool token plus a short tail must
 	// reach newline or end-of-input, allowing one terminal period. The tail
 	// cap (12) is the intel guard: narration tails ("now", "for you") are
 	// short, while same-line intel ("... now Rear vent.") overflows it and
 	// survives — narration leak beats intel loss, and ToolGuidance ordering
 	// call-or-answer upstream keeps narration rare; this strip is the
 	// backstop for leaked tool names.
-	narrateRe = regexp.MustCompile(`(?im)^\s*(calling|checking|searching|fetching|looking up)\s+(search_\w+|war_status|planet_status|wiki_search)\b[^\n.]{0,12}\.?(?:\n|$)`)
+	narrateRe = regexp.MustCompile(`(?im)^\s*(calling|checking|searching|fetching|looking up)\s+(get_unit|get_gear|get_place|list_units|list_gear|war_status|planet_status|wiki_search)\b[^\n.]{0,12}\.?(?:\n|$)`)
 	sourceRe  = regexp.MustCompile(`(?i)\[source:\s*([^\]]+)\]`)
 	// spaceRe/blankRe collapse whitespace left behind by the strips above.
 	// Package-level so the hot reply path never recompiles.
@@ -162,7 +162,7 @@ func PromptFor(q string) string {
 // Model-facing context and gorelay logs are untouched — this runs only on
 // the final reply path. Idempotent: clean text passes through unchanged.
 func Sanitize(reply string) string {
-	// Narration first: "Calling search_units now" must strip whole, before
+	// Narration first: "Calling get_unit now" must strip whole, before
 	// toolCallRe deletes the tool token and orphans "Calling now".
 	s := narrateRe.ReplaceAllString(reply, "")
 	s = toolCallRe.ReplaceAllString(s, "")

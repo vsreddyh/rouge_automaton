@@ -122,7 +122,7 @@ func TestChatWithTools(t *testing.T) {
 		}
 		round++
 		if round == 1 {
-			w.Write([]byte(`{"output":[{"type":"function_call","call_id":"call_1","name":"search_units","arguments":"{\"query\":\"hulk\"}"}]}`))
+			w.Write([]byte(`{"output":[{"type":"function_call","call_id":"call_1","name":"get_unit","arguments":"{\"name\":\"hulk\"}"}]}`))
 			return
 		}
 		// Round 2 must echo the call and carry its output.
@@ -136,10 +136,10 @@ func TestChatWithTools(t *testing.T) {
 	c := &Client{BaseURL: srv.URL, HTTP: srv.Client()}
 	execCalls := 0
 	got := c.ChatWithTools(context.Background(), "", "kill hulk?", nil, "s",
-		[]ToolDef{{Name: "search_units"}},
+		[]ToolDef{{Name: "get_unit"}},
 		func(ctx context.Context, name, args string) string {
 			execCalls++
-			if name != "search_units" || !strings.Contains(args, "hulk") {
+			if name != "get_unit" || !strings.Contains(args, "hulk") {
 				t.Errorf("exec got %q %q", name, args)
 			}
 			return "Hulk Bruiser: weak Back vent"
@@ -247,7 +247,7 @@ func TestChatWithToolsNilExec(t *testing.T) {
 		if v.Tools == nil {
 			t.Error("tools must marshal as [], never null")
 		}
-		w.Write([]byte(`{"output":[{"type":"function_call","call_id":"call_9","name":"search_units","arguments":"{}"}]}`))
+		w.Write([]byte(`{"output":[{"type":"function_call","call_id":"call_9","name":"get_unit","arguments":"{}"}]}`))
 	}))
 	defer srv.Close()
 	c := &Client{BaseURL: srv.URL, HTTP: srv.Client()}
@@ -266,12 +266,12 @@ func TestChatWithToolsExhausted(t *testing.T) {
 	rounds := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		rounds++
-		w.Write([]byte(`{"output":[{"type":"function_call","call_id":"call_` + strconv.Itoa(rounds) + `","name":"search_gear","arguments":"{}"}]}`))
+		w.Write([]byte(`{"output":[{"type":"function_call","call_id":"call_` + strconv.Itoa(rounds) + `","name":"get_gear","arguments":"{}"}]}`))
 	}))
 	defer srv.Close()
 	c := &Client{BaseURL: srv.URL, HTTP: srv.Client()}
 	got := c.ChatWithTools(context.Background(), "", "best loadout vs Automatons?", nil, "s",
-		[]ToolDef{{Name: "search_gear"}},
+		[]ToolDef{{Name: "get_gear"}},
 		func(ctx context.Context, name, args string) string { return "some intel" })
 	if got != Exhausted {
 		t.Fatalf("exhaustion must be Exhausted, got %q", got)
