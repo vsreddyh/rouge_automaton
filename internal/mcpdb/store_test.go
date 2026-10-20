@@ -115,6 +115,19 @@ func TestFormatFull(t *testing.T) {
 	if got := FormatFull(numAnatomy); !strings.Contains(got, "AV:0") || !strings.Contains(got, "fatal:1") {
 		t.Fatalf("numeric anatomy must coerce, got %q", got)
 	}
+	// Caller-constructed slices and zero/negative health (review r5).
+	rawAnatomy := bson.M{"name": "Hulk", "anatomy": []bson.M{{"part": "Vent"}}}
+	if got := FormatFull(rawAnatomy); !strings.Contains(got, "Vent") {
+		t.Fatalf("[]bson.M anatomy must render, got %q", got)
+	}
+	for _, h := range []any{"0.0", "00", -5, "n/a", true} {
+		if got := FormatFull(bson.M{"name": "X", "health": h}); strings.Contains(got, "health") {
+			t.Fatalf("non-positive health %v must not render, got %q", h, got)
+		}
+	}
+	if got := FormatFull(bson.M{"name": "X", "health": "1,800"}); !strings.Contains(got, "health 1,800") {
+		t.Fatalf("comma-grouped health must pass through, got %q", got)
+	}
 	// Newline keys flatten too — a wiki infobox key must never forge a
 	// second cited line (review r4).
 	nlKey := bson.M{"name": "Mortar", "params": bson.M{"da\nmage": 120}}

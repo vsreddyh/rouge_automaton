@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log"
 	"sort"
+	"strconv"
 	"strings"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -464,17 +465,19 @@ func toString(v any) string {
 }
 
 // healthOf reads health stored as BSON numerics or a comma-grouped string.
-// Anything non-numeric (or zero) reads empty; bools never render as health.
+// Anything non-numeric or non-positive reads empty; bools never render.
 func healthOf(d bson.M) string {
 	if _, ok := d["health"].(bool); ok {
 		return ""
 	}
-	switch h := toString(d["health"]); h {
-	case "", "0":
+	h := toString(d["health"])
+	if h == "" {
 		return ""
-	default:
-		return h
 	}
+	if n, err := strconv.ParseFloat(strings.ReplaceAll(h, ",", ""), 64); err != nil || n <= 0 {
+		return ""
+	}
+	return h
 }
 
 // anatomyRow reads one anatomy row stored as BSON or plain maps,
@@ -495,6 +498,11 @@ func anatomySummary(d bson.M) string {
 		rows = []any(v)
 	case []any:
 		rows = v
+	case []bson.M:
+		rows = make([]any, len(v))
+		for i, e := range v {
+			rows[i] = e
+		}
 	default:
 		return ""
 	}

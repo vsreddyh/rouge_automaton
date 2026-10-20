@@ -129,12 +129,25 @@ func run() error {
 		known := map[string][]string{}
 		for _, d := range found {
 			if n, ok := d["name"].(string); ok {
+				// Alias fields come in every writer shape (bson.A from
+				// mongo, []any/[]string from JSON decodes); coerce like
+				// strList so covered() never silently misses.
+				var raw []any
+				switch a := d["aliases"].(type) {
+				case bson.A:
+					raw = []any(a)
+				case []any:
+					raw = a
+				case []string:
+					raw = make([]any, len(a))
+					for i, s := range a {
+						raw[i] = s
+					}
+				}
 				var al []string
-				if a, ok := d["aliases"].(bson.A); ok {
-					for _, e := range a {
-						if s, ok := e.(string); ok {
-							al = append(al, strings.ToLower(s))
-						}
+				for _, e := range raw {
+					if s, ok := e.(string); ok && s != "" {
+						al = append(al, strings.ToLower(s))
 					}
 				}
 				known[strings.ToLower(n)] = al
