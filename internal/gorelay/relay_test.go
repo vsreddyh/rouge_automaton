@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -257,9 +259,9 @@ func TestChatWithToolsNilExec(t *testing.T) {
 	}
 }
 
-// TestChatWithToolsExhausted pins issue #43 path (c): three tool rounds
-// with no final answer must resolve to Exhausted, never Dead, so a healthy
-// uplink with thin intel cannot read as an outage.
+// TestChatWithToolsExhausted pins issue #43 path (c): maxToolRounds of tool
+// rounds with no final answer must resolve to Exhausted, never Dead, so a
+// healthy uplink with thin intel cannot read as an outage.
 func TestChatWithToolsExhausted(t *testing.T) {
 	rounds := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -277,7 +279,7 @@ func TestChatWithToolsExhausted(t *testing.T) {
 	if got == Dead {
 		t.Fatalf("exhaustion must never read as Dead")
 	}
-	if rounds != 3 {
+	if rounds != maxToolRounds {
 		t.Fatalf("must run all %d tool rounds, got %d", maxToolRounds, rounds)
 	}
 }
@@ -428,5 +430,95 @@ func TestProbeRateLimited(t *testing.T) {
 		if probeRateLimited(s) {
 			t.Fatalf("must not read busy: %q", s)
 		}
+	}
+}
+
+// TestOutputTokenCeiling pins issue #44 §3: Chat and ChatWithTools request
+// 4096 output tokens (fuller answers allowed), while Probe stays at 1.
+func TestOutputTokenCeiling(t *testing.T) {
+	check := func(t *testing.T, path string, call func(c *Client), want float64) {
+		t.Helper()
+		var seen atomic.Uint64 // math.Float64bits, race-safe across handler/test goroutines
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			var v struct {
+				MaxTokens float64 `json:"max_output_tokens"`
+			}
+			raw, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Errorf("%s: reading request body: %v", path, err)
+			}
+			if err := json.Unmarshal(raw, &v); err != nil {
+				t.Errorf("%s: decoding request body: %v", path, err)
+			}
+			seen.Store(math.Float64bits(v.MaxTokens))
+			if path == "probe" {
+				w.WriteHeader(200)
+				return
+			}
+			_, _ = w.Write([]byte(`{"output":[{"type":"message","content":[{"type":"output_text","text":"Hi. Over."}]}]}`))
+		}))
+		t.Cleanup(srv.Close)
+		c := &Client{BaseURL: srv.URL, HTTP: srv.Client()}
+		call(c)
+		if got := math.Float64frombits(seen.Load()); got != want {
+			t.Fatalf("%s: max_output_tokens = %v, want %v", path, got, want)
+		}
+	}
+	check(t, "chat", func(c *Client) {
+		c.Chat(context.Background(), "", "hi", nil, "s")
+	}, 4096)
+	check(t, "tools", func(c *Client) {
+		c.ChatWithTools(context.Background(), "", "hi", nil, "s", nil,
+			func(ctx context.Context, name, args string) string { return "" })
+	}, 4096)
+	check(t, "probe", func(c *Client) { c.Probe(context.Background()) }, 1)
+}
+
+// TestToolOutputCapped pins the input-growth bound: an overlong tool
+// result reaches the next round truncated with an explicit marker, so 10
+// rounds of wiki-size outputs cannot compound unbounded into the context.
+func TestToolOutputCapped(t *testing.T) {
+	if got := capToolOutput("short"); got != "short" {
+		t.Fatalf("short output must pass through, got %q", got)
+	}
+	big := strings.Repeat("x", maxToolOutputRunes+100)
+	got := capToolOutput(big)
+	if strings.Contains(got, strings.Repeat("x", maxToolOutputRunes+100)) {
+		t.Fatal("overlong output must be truncated")
+	}
+	if !strings.Contains(got, "[tool output truncated]") {
+		tail := []rune(got)
+		t.Fatalf("truncation must be explicit, got tail %q", string(tail[len(tail)-30:]))
+	}
+
+	// End to end: the function_call_output in round 2 carries the cap.
+	var rounds atomic.Int64
+	var round2 atomic.Value // string, race-safe across handler/test goroutines
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if rounds.Add(1) == 1 {
+			_, _ = w.Write([]byte(`{"output":[{"type":"function_call","call_id":"call_1","name":"wiki_search","arguments":"{}"}]}`))
+			return
+		}
+		raw, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("reading round-2 body: %v", err)
+		}
+		round2.Store(string(raw))
+		_, _ = w.Write([]byte(`{"output":[{"type":"message","content":[{"type":"output_text","text":"Done. Over."}]}]}`))
+	}))
+	t.Cleanup(srv.Close)
+	c := &Client{BaseURL: srv.URL, HTTP: srv.Client()}
+	c.ChatWithTools(context.Background(), "", "q?", nil, "s",
+		[]ToolDef{{Name: "wiki_search"}},
+		func(ctx context.Context, name, args string) string { return big })
+	body, ok := round2.Load().(string)
+	if !ok {
+		t.Fatal("round 2 never ran")
+	}
+	if !strings.Contains(body, "[tool output truncated]") {
+		t.Fatal("round 2 must carry the capped tool output")
+	}
+	if strings.Contains(body, strings.Repeat("x", maxToolOutputRunes+100)) {
+		t.Fatal("round 2 must not carry the uncapped output")
 	}
 }

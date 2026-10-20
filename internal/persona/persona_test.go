@@ -73,12 +73,30 @@ func TestIntelPromptHasNoBackstory(t *testing.T) {
 	if n := strings.Count(got, "Helldiver"); n > 1 {
 		t.Fatalf("Helldiver must not be repeated in everyday prompts, got %d", n)
 	}
-	if !strings.Contains(got, "name a target") {
-		t.Fatal("prompts must keep the no-helpdesk / no-target rule")
+	// Issue #44: brevity rules dropped — no terse/short-burst phrasing and
+	// no word cap on replies anywhere in the prompt layers.
+	for _, banned := range []string{"terse", "short bursts", "120 words", "<120"} {
+		if strings.Contains(strings.ToLower(got), banned) {
+			t.Fatalf("intel prompt must not carry brevity rule %q", banned)
+		}
+	}
+	// Issue #44: the old never-clarify rule is replaced by the escape
+	// hatch — one short question only when genuinely ambiguous and no
+	// tool resolves it, with zero-argument questions answered directly.
+	if strings.Contains(got, "Never ask the user to clarify") {
+		t.Fatal("prompts must drop the never-clarify rule (issue #44)")
+	}
+	if !strings.Contains(strings.ToLower(got), "clarifying question") {
+		t.Fatal("prompts must keep the clarification escape hatch")
+	}
+	if !strings.Contains(got, "as fully as the question needs") {
+		t.Fatal("prompts must allow answers as full as the question needs")
 	}
 	if !strings.Contains(got, "never refuse") {
 		t.Fatal("intel prompt must keep the equal-faction never-refuse rule")
 	}
+	// The prompt layer itself stays concise (<120 words) so it never
+	// inherits backstory weight — this is prompt hygiene, not a reply cap.
 	if c := len(strings.Fields(VoiceCard)); c >= 120 {
 		t.Fatalf("voice card must stay <120 words, got %d", c)
 	}

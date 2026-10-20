@@ -329,7 +329,12 @@ func (b *Bot) onMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 			return
 		}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	// The think-act loop may run up to maxToolRounds (10) rounds at up to
+	// 60s per round under a 300s turn budget: typical-latency rounds are
+	// unbounded in practice (turns finish in seconds), while a fully-hung
+	// upstream dies to the deadline around round 5 instead of mid-flight
+	// on a loadout question. The deadline is the backstop, not the budget.
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Second)
 	defer cancel()
 	// The answer goes into the thread the bot opens, not the parent
 	// channel: replying to m.ChannelID after creating a thread leaves the

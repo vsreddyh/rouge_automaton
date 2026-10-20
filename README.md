@@ -6,7 +6,7 @@ Lightweight Go Discord bot for Helldivers 2 intel, roleplayed as a defected info
 
 - Answers Helldivers 2 intel questions: unit weak points, counters, loadouts, tactics, faction lore, plus biome/planet/mission context and live war status.
 - Full wiki coverage (units, structures, weapons, stratagems, armor, boosters, biomes, planets, missions) cached in MongoDB and refreshed from the wiki RecentChanges feed.
-- Persona: ex–Super Citizen / Helldiver, captured on Cyberstan, experimented on, escaped into a bot husk. Controlled cold rage, terse, addresses you as "Helldiver", ends transmissions with `Over.`
+- Persona: ex–Super Citizen / Helldiver, captured on Cyberstan, experimented on, escaped into a bot husk. Controlled cold rage, addresses you as "Helldiver", ends transmissions with `Over.`
 - Serial is always `[REDACTED]`. Never invents a name. Never claims to be AI. Never sympathizes with Automatons.
 - On local DB miss: live lookup on `helldivers.wiki.gg`, summarized — weak point + counter + source link.
 - Model rule: Muse Spark 1.3 Contributor or nothing (`https://opencode.ai/zen/go`, `muse-spark-1.3-contributor`). `429` → busy-spreading-democracy reply with liberation ETA. No silent fallback.
@@ -62,7 +62,8 @@ podman run --rm --network=host -e MONGO_URI=mongodb://127.0.0.1:27017/rouge \
 - Mention-gated replies (`require_mention: true`), `auto_thread: true`: a mention opens a thread and the answer lands inside it — follow-ups in threads the bot opened or has spoken in answer without a fresh mention (same relay session, keyed by thread ID). Strangers' threads still need a mention. Outside threads, a mention is required; configured free-response channels answer without a mention (each costs a model call — keep the list short).
 - Greetings (`hi`/`hello`/`hey`, also `yo`/`o7`): answered by the model in voice, whatever fits the moment — no canned line, no helpdesk menu, no "state target".
 - War-status questions (`what's the war status`, `how goes the front`) get a live summary of active fronts — no planet name required.
-- Every intel answer: weak point + counter + source (Mongo doc or live link).
+- Every intel answer: weak point + counter + source (Mongo doc or live link), as fully as the question needs (no word cap; the 2000-rune Discord cut is the transport limit).
+- Genuinely ambiguous questions with no tool to resolve them get one short clarifying question instead of a guess; anything a tool already covers is answered directly.
 
 ## Answer pipeline
 
@@ -75,7 +76,9 @@ podman run --rm --network=host -e MONGO_URI=mongodb://127.0.0.1:27017/rouge \
    overlap + name/alias bonus; every answer cites its source.
 3. Miss → the model falls back to `wiki_search` (`helldivers.wiki.gg`),
    summarized with links. Unknowns are reported as unconfirmed, not invented.
-4. Rate limit (`429`) → exact reply: `The Lost Son is busy spreading democracy on Cyberstan. Hold position, Helldiver — try again shortly. Estimated time of liberation: {n}s.` Other backend failures → `Uplink dead. No fallback. For Super Earth, try later.` Tool-loop exhaustion (model kept searching past maxToolRounds with no answer) → `Couldn't pin it down — intel thin or scattered. Unconfirmed. Narrow the target and try again.` (never Uplink dead; the uplink is healthy, the intel is thin).
+   Genuinely ambiguous queries with no resolving tool get one short
+   clarifying question instead of guesses or search loops.
+4. Rate limit (`429`) → exact reply: `The Lost Son is busy spreading democracy on Cyberstan. Hold position, Helldiver — try again shortly. Estimated time of liberation: {n}s.` Other backend failures → `Uplink dead. No fallback. For Super Earth, try later.` Tool-loop exhaustion (model kept calling tools past maxToolRounds=10 with no answer) → `Couldn't pin it down — intel thin or scattered. Unconfirmed. Narrow the target and try again.` (never Uplink dead; the uplink is healthy, the intel is thin — fires far less often at 10 rounds).
 
 Doctrine reminders: flank Hulk/Tank rear vents, Flare Trooper first, objectives (fabricators / bug holes / warp ships) before heavies.
 
