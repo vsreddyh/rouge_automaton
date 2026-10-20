@@ -7,6 +7,7 @@ package mcpdb
 import (
 	"context"
 	"sort"
+	"strconv"
 	"strings"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -45,13 +46,19 @@ const (
 )
 
 // strList reads a doc field that may be stored as a BSON array, a Go slice,
-// or a lone string, always returning a slice. Docs come from two writers
-// (seed ingest and wiki crawl) with slightly different shapes, so callers
-// must not assume one representation.
+// a generic decoded slice, or a lone string, always returning a slice. Docs
+// come from two writers (seed ingest and wiki crawl) with slightly different
+// shapes, so callers must not assume one representation.
 func strList(m bson.M, key string) []string {
 	var out []string
 	switch v := m[key].(type) {
 	case bson.A:
+		for _, e := range v {
+			if s, ok := e.(string); ok {
+				out = append(out, s)
+			}
+		}
+	case []any:
 		for _, e := range v {
 			if s, ok := e.(string); ok {
 				out = append(out, s)
@@ -157,8 +164,8 @@ func findAll(ctx context.Context, db *mongo.Database, coll string, filter bson.M
 	return docs
 }
 
-// clampLimit bounds a roster limit to [1, maxListLimit], defaulting
-// non-positive values to defaultListLimit.
+// clampLimit bounds a roster limit, defaulting non-positive values to
+// defaultListLimit and capping at maxListLimit.
 func clampLimit(n int) int {
 	if n <= 0 {
 		return defaultListLimit
@@ -169,9 +176,44 @@ func clampLimit(n int) int {
 	return n
 }
 
+// clampOffset floors a roster offset at zero: negative offsets read from
+// the start instead of panicking the slice.
+func clampOffset(n int) int {
+	if n < 0 {
+		return 0
+	}
+	return n
+}
+
+// paginate cuts a sorted roster to [offset, offset+limit). Pure so tests pin
+// the list-then-fetch discoverability contract without a database.
+func paginate(docs []bson.M, limit, offset int) []bson.M {
+	limit = clampLimit(limit)
+	offset = clampOffset(offset)
+	if offset >= len(docs) {
+		return nil
+	}
+	docs = docs[offset:]
+	if len(docs) > limit {
+		docs = docs[:limit]
+	}
+	return docs
+}
+
+// byName orders docs by normalized name so the roster is deterministic and
+// case-insensitive across identical queries.
+func byName(docs []bson.M) {
+	sort.SliceStable(docs, func(i, j int) bool { return normalize(docName(docs[i])) < normalize(docName(docs[j])) })
+}
+
 // GetUnit fetches one enemy unit or structure by exact name or alias
 // (case-insensitive), searching units then structures. Returns the doc, the
 // collection that held it, and whether it was found.
+//
+// Small-scale scan by design: at ~900 docs a bounded per-collection fetch
+// plus Go exact-match is deterministic and keeps alias resolution in one
+// place. The unique (faction, name) indexes from ingest enforce identity;
+// they are not the lookup path.
 func GetUnit(ctx context.Context, db *mongo.Database, name string) (bson.M, string, bool) {
 	if normalize(name) == "" {
 		return nil, "", false
@@ -187,10 +229,10 @@ func GetUnit(ctx context.Context, db *mongo.Database, name string) (bson.M, stri
 }
 
 // ListUnits returns the faction-filtered roster (units plus structures),
-// optionally narrowed by a role substring, cut to limit. Sorted by name so
-// the roster is deterministic across identical queries.
-func ListUnits(ctx context.Context, db *mongo.Database, faction, role string, limit int) []bson.M {
-	limit = clampLimit(limit)
+// optionally narrowed by a role substring, paged by limit/offset. Sorted by
+// normalized name so every page is deterministic; offset keeps names beyond
+// the first page discoverable via list-then-fetch.
+func ListUnits(ctx context.Context, db *mongo.Database, faction, role string, limit, offset int) []bson.M {
 	faction = normalize(faction)
 	if !Factions[faction] {
 		return nil
@@ -200,16 +242,14 @@ func ListUnits(ctx context.Context, db *mongo.Database, faction, role string, li
 		docs = append(docs, findAll(ctx, db, coll, bson.M{}, fetchCap)...)
 	}
 	out := FilterUnits(docs, faction, role)
-	sort.SliceStable(out, func(i, j int) bool { return docName(out[i]) < docName(out[j]) })
-	if len(out) > limit {
-		out = out[:limit]
-	}
-	return out
+	byName(out)
+	return paginate(out, limit, offset)
 }
 
 // GetGear fetches one gear doc by exact name or alias across the four gear
 // collections. Returns the doc, the collection (category) that held it, and
-// whether it was found.
+// whether it was found. Same small-scale scan contract as GetUnit: bounded
+// fetches plus Go exact-match; the unique name indexes enforce identity.
 func GetGear(ctx context.Context, db *mongo.Database, name string) (bson.M, string, bool) {
 	if normalize(name) == "" {
 		return nil, "", false
@@ -224,26 +264,24 @@ func GetGear(ctx context.Context, db *mongo.Database, name string) (bson.M, stri
 	return nil, "", false
 }
 
-// ListGear returns the roster of one gear category, sorted by name and cut
-// to limit. Unknown categories yield no docs rather than a wrong shelf.
-func ListGear(ctx context.Context, db *mongo.Database, category string, limit int) []bson.M {
-	limit = clampLimit(limit)
+// ListGear returns the roster of one gear category, paged by limit/offset
+// and sorted by normalized name. Unknown categories yield no docs rather
+// than a wrong shelf.
+func ListGear(ctx context.Context, db *mongo.Database, category string, limit, offset int) []bson.M {
 	category = normalize(category)
 	if !GearCategories[category] {
 		return nil
 	}
 	docs := findAll(ctx, db, category, bson.M{}, fetchCap)
-	sort.SliceStable(docs, func(i, j int) bool { return docName(docs[i]) < docName(docs[j]) })
-	if len(docs) > limit {
-		docs = docs[:limit]
-	}
-	return docs
+	byName(docs)
+	return paginate(docs, limit, offset)
 }
 
 // GetPlace fetches one static world doc (biome, planet, mission,
 // difficulty, effect) by exact name or alias. Live ownership stays on
 // planet_status — this is the static intel shelf. Returns the doc, the
-// collection that held it, and whether it was found.
+// collection that held it, and whether it was found. Same small-scale scan
+// contract as GetUnit; the unique name indexes enforce identity.
 func GetPlace(ctx context.Context, db *mongo.Database, name string) (bson.M, string, bool) {
 	if normalize(name) == "" {
 		return nil, "", false
@@ -375,24 +413,40 @@ func FormatFull(d bson.M) string {
 	return line + " [source: " + src + "]"
 }
 
-// healthOf reads health stored as int shapes or a comma-grouped string.
+// healthOf reads health stored as BSON numerics or a comma-grouped string.
 func healthOf(d bson.M) string {
 	switch v := d["health"].(type) {
 	case int:
 		if v > 0 {
-			return itoa(v)
+			return strconv.Itoa(v)
 		}
 	case int32:
 		if v > 0 {
-			return itoa(int(v))
+			return strconv.Itoa(int(v))
 		}
 	case int64:
 		if v > 0 {
-			return itoa(int(v))
+			return strconv.Itoa(int(v))
+		}
+	case uint:
+		if v > 0 {
+			return strconv.Itoa(int(v))
+		}
+	case uint32:
+		if v > 0 {
+			return strconv.Itoa(int(v))
+		}
+	case uint64:
+		if v > 0 {
+			return strconv.Itoa(int(v))
+		}
+	case float32:
+		if v > 0 {
+			return strconv.Itoa(int(v))
 		}
 	case float64:
 		if v > 0 {
-			return itoa(int(v))
+			return strconv.Itoa(int(v))
 		}
 	case string:
 		if v != "" {
@@ -402,34 +456,54 @@ func healthOf(d bson.M) string {
 	return ""
 }
 
-// anatomySummary condenses anatomy rows to "part (AV fatal)" triples.
+// anatomyRow reads one anatomy row stored as BSON or plain maps.
+func anatomyRow(m map[string]any) (part, av, fatal string) {
+	part, _ = m["part"].(string)
+	av, _ = m["av"].(string)
+	fatal, _ = m["fatal"].(string)
+	return part, av, fatal
+}
+
+// anatomySummary condenses anatomy rows to "part (AV fatal)" triples,
+// accepting BSON and plain decoded shapes.
 func anatomySummary(d bson.M) string {
-	var rows []string
+	var rows []any
 	switch v := d["anatomy"].(type) {
 	case bson.A:
-		for _, e := range v {
-			m, ok := e.(bson.M)
-			if !ok {
-				continue
-			}
-			part, _ := m["part"].(string)
-			if part == "" {
-				continue
-			}
-			detail := part
-			if av, _ := m["av"].(string); av != "" {
-				detail += " AV:" + av
-			}
-			if fatal, _ := m["fatal"].(string); fatal != "" {
-				detail += " fatal:" + fatal
-			}
-			rows = append(rows, detail)
-			if len(rows) >= 4 {
-				break
-			}
+		rows = []any(v)
+	case []any:
+		rows = v
+	default:
+		return ""
+	}
+	var out []string
+	for _, e := range rows {
+		var m map[string]any
+		switch t := e.(type) {
+		case bson.M:
+			m = map[string]any(t)
+		case map[string]any:
+			m = t
+		default:
+			continue
+		}
+		part, av, fatal := anatomyRow(m)
+		if part == "" {
+			continue
+		}
+		detail := part
+		if av != "" {
+			detail += " AV:" + av
+		}
+		if fatal != "" {
+			detail += " fatal:" + fatal
+		}
+		out = append(out, detail)
+		if len(out) >= 4 {
+			break
 		}
 	}
-	return strings.Join(rows, ", ")
+	return strings.Join(out, ", ")
 }
 
 // tacticsSummary joins the first two wiki tactics lines.
@@ -458,10 +532,26 @@ func conditionsSummary(d bson.M) string {
 	return strings.Join(parts, "; ")
 }
 
-// paramsSummary renders generic gear/world infobox params as k=v pairs.
+// paramsSummary renders generic gear/world infobox params as k=v pairs,
+// accepting BSON and plain decoded shapes.
 func paramsSummary(d bson.M) string {
-	m, ok := d["params"].(bson.M)
-	if !ok || len(m) == 0 {
+	var m map[string]any
+	switch v := d["params"].(type) {
+	case bson.M:
+		m = map[string]any(v)
+	case map[string]any:
+		m = v
+	case bson.D:
+		m = map[string]any{}
+		for _, e := range v {
+			if s, ok := e.Value.(string); ok {
+				m[e.Key] = s
+			}
+		}
+	default:
+		return ""
+	}
+	if len(m) == 0 {
 		return ""
 	}
 	keys := make([]string, 0, len(m))
@@ -479,26 +569,4 @@ func paramsSummary(d bson.M) string {
 		}
 	}
 	return strings.Join(pairs, ", ")
-}
-
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	neg := n < 0
-	if neg {
-		n = -n
-	}
-	var b [20]byte
-	i := len(b)
-	for n > 0 {
-		i--
-		b[i] = byte('0' + n%10)
-		n /= 10
-	}
-	if neg {
-		i--
-		b[i] = '-'
-	}
-	return string(b[i:])
 }

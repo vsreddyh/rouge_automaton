@@ -92,7 +92,7 @@ func TestFormatFull(t *testing.T) {
 		"name": "Hulk Bruiser", "faction": "automatons", "role": "Massive walker",
 		"weak_points": bson.A{"Rear vent"}, "counters": bson.A{"AMR"},
 		"health": 1800, "size": "Massive", "source": "data/automatons.json",
-		"anatomy":     bson.A{bson.M{"part": "Vent", "av": "0", "fatal": "yes"}},
+		"anatomy":      bson.A{bson.M{"part": "Vent", "av": "0", "fatal": "yes"}},
 		"wiki_tactics": []string{"Flank it"},
 	}
 	got := FormatFull(doc)
@@ -117,5 +117,24 @@ func TestClampLimit(t *testing.T) {
 	}
 	if got := clampLimit(5); got != 5 {
 		t.Fatalf("in-range must pass through, got %d", got)
+	}
+}
+
+func TestPaginate(t *testing.T) {
+	docs := []bson.M{{"name": "b"}, {"name": "a"}, {"name": "c"}}
+	byName(docs)
+	if docName(docs[0]) != "a" || docName(docs[1]) != "b" || docName(docs[2]) != "c" {
+		t.Fatalf("byName must sort case-insensitively, got %v", docs)
+	}
+	// Offset keeps names beyond the first page discoverable.
+	page := paginate(docs, 2, 2)
+	if len(page) != 1 || docName(page[0]) != "c" {
+		t.Fatalf("second page must hold c, got %v", page)
+	}
+	if got := paginate(docs, 2, 9); len(got) != 0 {
+		t.Fatalf("past-end offset must yield no docs, got %v", got)
+	}
+	if got := clampOffset(-3); got != 0 {
+		t.Fatalf("negative offset must floor at zero, got %d", got)
 	}
 }

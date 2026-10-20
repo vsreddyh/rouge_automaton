@@ -74,6 +74,7 @@ func ToolDefs() []gorelay.ToolDef {
 		return map[string]any{"type": "object", "properties": props, "required": required}
 	}
 	limitProp := map[string]any{"type": "integer", "description": "max docs to return (default 10, max 20)"}
+	offsetProp := map[string]any{"type": "integer", "description": "roster offset for paging past the first page (default 0)"}
 	return []gorelay.ToolDef{
 		{Name: "get_unit",
 			Description: "Fetch one enemy unit or structure by exact name or alias (case-insensitive, e.g. Hulk Bruiser or hulk). Full doc: role, weak points, counters, source. Use for any 'how to kill X' question.",
@@ -86,6 +87,7 @@ func ToolDefs() []gorelay.ToolDef {
 				"faction": map[string]any{"type": "string", "description": "one of automatons, terminids, illuminate", "enum": []string{"automatons", "terminids", "illuminate"}},
 				"role":    strProp("optional role substring filter, e.g. walker"),
 				"limit":   limitProp,
+				"offset":  offsetProp,
 			}, "faction")},
 		{Name: "get_gear",
 			Description: "Fetch one weapon, stratagem, armor or booster by exact name or alias (case-insensitive). Full doc with source. Use for loadout detail questions.",
@@ -97,6 +99,7 @@ func ToolDefs() []gorelay.ToolDef {
 			Parameters: obj(map[string]any{
 				"category": map[string]any{"type": "string", "description": "one of weapons, stratagems, armor, boosters", "enum": []string{"weapons", "stratagems", "armor", "boosters"}},
 				"limit":    limitProp,
+				"offset":   offsetProp,
 			}, "category")},
 		{Name: "get_place",
 			Description: "Fetch one static planet, biome, mission, difficulty or effect by exact name (case-insensitive). Use for where-to-fight questions. Live ownership stays on planet_status.",
@@ -148,8 +151,8 @@ func (e *Executor) Execute(ctx context.Context, name, argsJSON string) string {
 		if e.DB == nil {
 			return "local intel store not wired — report as unconfirmed"
 		}
-		docs := ListUnits(ctx, e.DB, faction, strArg(args, "role"), intArg(args, "limit", defaultListLimit))
-		return withEmptyHint(FormatContext(docs), "")
+		docs := ListUnits(ctx, e.DB, faction, strArg(args, "role"), intArg(args, "limit", defaultListLimit), intArg(args, "offset", 0))
+		return withEmptyHint(FormatContext(docs))
 	case "get_gear":
 		want := strArg(args, "name")
 		if want == "" {
@@ -170,8 +173,8 @@ func (e *Executor) Execute(ctx context.Context, name, argsJSON string) string {
 		if e.DB == nil {
 			return "local intel store not wired — report as unconfirmed"
 		}
-		docs := ListGear(ctx, e.DB, category, intArg(args, "limit", defaultListLimit))
-		return withEmptyHint(FormatContext(docs), "")
+		docs := ListGear(ctx, e.DB, category, intArg(args, "limit", defaultListLimit), intArg(args, "offset", 0))
+		return withEmptyHint(FormatContext(docs))
 	case "get_place":
 		want := strArg(args, "name")
 		if want == "" {
@@ -221,7 +224,7 @@ func (e *Executor) Execute(ctx context.Context, name, argsJSON string) string {
 
 // withEmptyHint turns an empty result into guidance the model can act on
 // (try another tool) instead of a dead end it might present as fact.
-func withEmptyHint(formatted, _ string) string {
+func withEmptyHint(formatted string) string {
 	if strings.TrimSpace(formatted) == "" {
 		return "no local intel for that — try a list tool for canonical names, or wiki_search"
 	}
@@ -243,6 +246,8 @@ func intArg(args map[string]any, key string, def int) int {
 		return int(v)
 	case int:
 		return v
+	case int32:
+		return int(v)
 	case int64:
 		return int(v)
 	case json.Number:

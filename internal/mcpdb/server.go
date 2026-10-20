@@ -17,17 +17,20 @@ type nameArgs struct {
 }
 
 // listUnitsArgs covers the faction roster: faction is required, role and
-// limit narrow it.
+// limit narrow it, offset pages past the first page.
 type listUnitsArgs struct {
 	Faction string `json:"faction" jsonschema:"one of automatons, terminids, illuminate"`
 	Role    string `json:"role,omitempty" jsonschema:"optional role substring filter, e.g. walker"`
 	Limit   int    `json:"limit,omitempty" jsonschema:"max docs to return (default 10, max 20)"`
+	Offset  int    `json:"offset,omitempty" jsonschema:"roster offset for paging (default 0)"`
 }
 
-// listGearArgs covers the gear shelf: category is required, limit caps it.
+// listGearArgs covers the gear shelf: category is required, limit caps it,
+// offset pages past the first page.
 type listGearArgs struct {
 	Category string `json:"category" jsonschema:"one of weapons, stratagems, armor, boosters"`
 	Limit    int    `json:"limit,omitempty" jsonschema:"max docs to return (default 10, max 20)"`
+	Offset   int    `json:"offset,omitempty" jsonschema:"shelf offset for paging (default 0)"`
 }
 
 // wikiArgs covers the fuzzy fallback of last resort.
