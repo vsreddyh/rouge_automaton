@@ -55,33 +55,50 @@ func main() {
 	}
 }
 
+// ciCollation backs exact-name identity end to end: the unique indexes and
+// the upsert filters both compare case-insensitively, matching the
+// server-side normalize/isExactMatch.
+var ciCollation = &options.Collation{Locale: "en", Strength: 2}
+
 // ensureIndexes creates the unique indexes the exact tools rely on:
 // (faction, name) for units and structures, name for gear and world
 // collections. Strength-2 collation makes uniqueness case-insensitive to
 // match the server-side exact lookup (normalize/isExactMatch); without it
 // "Hulk" and "hulk" could both insert and the winner would be sort order.
-// Idempotent: CreateOne is a no-op when the index exists.
+// Explicit ci names plus a best-effort drop of the pre-collation legacy
+// indexes (auto names): re-running ingest where the legacy index exists
+// must stay a no-op, never an IndexOptionsConflict.
 func ensureIndexes(ctx context.Context, db *mongo.Database) error {
 	pair := mongo.IndexModel{
 		Keys: bson.D{{Key: "faction", Value: 1}, {Key: "name", Value: 1}},
-		Options: options.Index().SetUnique(true).
-			SetCollation(&options.Collation{Locale: "en", Strength: 2}),
+		Options: options.Index().SetUnique(true).SetName("faction_name_ci").
+			SetCollation(ciCollation),
+	}
+	single := mongo.IndexModel{
+		Keys: bson.D{{Key: "name", Value: 1}},
+		Options: options.Index().SetUnique(true).SetName("name_ci").
+			SetCollation(ciCollation),
+	}
+	// dropLegacy removes the pre-collation index if present; absence (or
+	// any other drop error) is not fatal — the ci index above is the
+	// enforcement point either way.
+	dropLegacy := func(coll, name string) {
+		if _, err := db.Collection(coll).Indexes().DropOne(ctx, name); err != nil {
+			log.Printf("ingest: drop legacy index %s.%s: %v", coll, name, err)
+		}
 	}
 	for _, coll := range []string{"units", "structures"} {
 		if _, err := db.Collection(coll).Indexes().CreateOne(ctx, pair); err != nil {
 			return fmt.Errorf("index %s: %w", coll, err)
 		}
-	}
-	single := mongo.IndexModel{
-		Keys: bson.D{{Key: "name", Value: 1}},
-		Options: options.Index().SetUnique(true).
-			SetCollation(&options.Collation{Locale: "en", Strength: 2}),
+		dropLegacy(coll, "faction_1_name_1")
 	}
 	for _, coll := range []string{"weapons", "stratagems", "armor", "boosters",
 		"biomes", "planets", "missions", "difficulty", "effects"} {
 		if _, err := db.Collection(coll).Indexes().CreateOne(ctx, single); err != nil {
 			return fmt.Errorf("index %s: %w", coll, err)
 		}
+		dropLegacy(coll, "name_1")
 	}
 	return nil
 }
@@ -150,6 +167,9 @@ func run() error {
 					}
 				case json.Number:
 					raw = []any{string(a)}
+				case string:
+					// A lone string alias (same shape strList accepts).
+					raw = []any{a}
 				case bson.D:
 					for _, e := range a {
 						raw = append(raw, e.Value)
@@ -247,6 +267,7 @@ func run() error {
 			unitOps = append(unitOps, mongo.NewUpdateOneModel().
 				SetFilter(bson.M{"faction": faction, "name": u.Name}).
 				SetUpdate(bson.M{"$setOnInsert": seed}).
+				SetCollation(ciCollation).
 				SetUpsert(true))
 		}
 		for _, s := range d.Structures {
@@ -265,6 +286,7 @@ func run() error {
 			structOps = append(structOps, mongo.NewUpdateOneModel().
 				SetFilter(bson.M{"faction": faction, "name": s.Name}).
 				SetUpdate(bson.M{"$setOnInsert": seed}).
+				SetCollation(ciCollation).
 				SetUpsert(true))
 		}
 	}

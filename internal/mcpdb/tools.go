@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 
@@ -249,6 +250,11 @@ func intArg(args map[string]any, key string, def int) int {
 		return n
 	}
 	if f, err := strconv.ParseFloat(strings.ReplaceAll(s, ",", ""), 64); err == nil {
+		// int(f) is implementation-defined on NaN/Inf/out-of-range, and
+		// the later clamp cannot save it — range-check first.
+		if math.IsNaN(f) || math.IsInf(f, 0) || f >= 1<<63 || f < -(1<<63) {
+			return def
+		}
 		return int(f)
 	}
 	return def

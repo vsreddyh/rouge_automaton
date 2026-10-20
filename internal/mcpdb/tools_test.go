@@ -3,6 +3,7 @@ package mcpdb
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -98,6 +99,10 @@ func TestIntArgShapes(t *testing.T) {
 		{"7", 7},
 		{"4.5", 4},
 		{json.Number("9"), 9},
+		{math.NaN(), 3},
+		{math.Inf(1), 3},
+		{math.Inf(-1), 3},
+		{"1e100", 3},
 	} {
 		if got := intArg(map[string]any{"k": tc.v}, "k", 3); got != tc.want {
 			t.Fatalf("intArg(%v) = %d, want %d", tc.v, got, tc.want)

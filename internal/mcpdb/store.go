@@ -236,7 +236,7 @@ func byName(docs []bson.M) {
 // place. The unique (faction, name) indexes from ingest enforce identity;
 // they are not the lookup path.
 func GetUnit(ctx context.Context, db *mongo.Database, name string) (bson.M, string, bool) {
-	if normalize(name) == "" {
+	if normalize(name) == "" || db == nil {
 		return nil, "", false
 	}
 	for _, coll := range UnitCollections {
@@ -261,7 +261,7 @@ func GetUnit(ctx context.Context, db *mongo.Database, name string) (bson.M, stri
 // the first page discoverable via list-then-fetch.
 func ListUnits(ctx context.Context, db *mongo.Database, faction, role string, limit, offset int) []bson.M {
 	faction = normalize(faction)
-	if !Factions[faction] {
+	if !Factions[faction] || db == nil {
 		return nil
 	}
 	var docs []bson.M
@@ -278,7 +278,7 @@ func ListUnits(ctx context.Context, db *mongo.Database, faction, role string, li
 // whether it was found. Same small-scale scan contract as GetUnit: bounded
 // fetches plus Go exact-match; the unique name indexes enforce identity.
 func GetGear(ctx context.Context, db *mongo.Database, name string) (bson.M, string, bool) {
-	if normalize(name) == "" {
+	if normalize(name) == "" || db == nil {
 		return nil, "", false
 	}
 	for _, coll := range GearCollections {
@@ -300,7 +300,7 @@ func GetGear(ctx context.Context, db *mongo.Database, name string) (bson.M, stri
 // than a wrong shelf.
 func ListGear(ctx context.Context, db *mongo.Database, category string, limit, offset int) []bson.M {
 	category = normalize(category)
-	if !GearCategories[category] {
+	if !GearCategories[category] || db == nil {
 		return nil
 	}
 	docs := findAll(ctx, db, category, bson.M{}, fetchCap)
@@ -314,7 +314,7 @@ func ListGear(ctx context.Context, db *mongo.Database, category string, limit, o
 // collection that held it, and whether it was found. Same small-scale scan
 // contract as GetUnit; the unique name indexes enforce identity.
 func GetPlace(ctx context.Context, db *mongo.Database, name string) (bson.M, string, bool) {
-	if normalize(name) == "" {
+	if normalize(name) == "" || db == nil {
 		return nil, "", false
 	}
 	for _, coll := range PlaceCollections {
