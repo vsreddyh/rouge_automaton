@@ -179,8 +179,21 @@ func strArg(args map[string]any, key string) string {
 }
 
 func intArg(args map[string]any, key string, def int) int {
-	if f, ok := args[key].(float64); ok {
-		return int(f)
+	// Same hardening as live.num: JSON decode gives float64 today, but the
+	// switch keeps k sane if a caller ever passes int shapes.
+	switch v := args[key].(type) {
+	case float64:
+		return int(v)
+	case float32:
+		return int(v)
+	case int:
+		return v
+	case int64:
+		return int(v)
+	case json.Number:
+		if n, err := v.Int64(); err == nil {
+			return int(n)
+		}
 	}
 	return def
 }

@@ -51,3 +51,22 @@ func TestExecuteUnknownAndBadArgs(t *testing.T) {
 		t.Fatalf("nil wiki client: %q", got)
 	}
 }
+
+func TestIntArgShapes(t *testing.T) {
+	for _, tc := range []struct {
+		v    any
+		want int
+	}{
+		{float64(4), 4},
+		{float32(3), 3},
+		{2, 2},
+		{int64(5), 5},
+	} {
+		if got := intArg(map[string]any{"k": tc.v}, "k", 3); got != tc.want {
+			t.Fatalf("intArg(%v) = %d, want %d", tc.v, got, tc.want)
+		}
+	}
+	if got := intArg(map[string]any{}, "k", 3); got != 3 {
+		t.Fatalf("missing k must default, got %d", got)
+	}
+}

@@ -103,8 +103,9 @@ var (
 	// reach newline or end-of-input, allowing one terminal period. The tail
 	// cap (12) is the intel guard: narration tails ("now", "for you") are
 	// short, while same-line intel ("... now Rear vent.") overflows it and
-	// survives — narration leak beats intel loss, and ToolGuidance plus the
-	// relay ack-nudge prevent narration upstream.
+	// survives — narration leak beats intel loss, and ToolGuidance ordering
+	// call-or-answer upstream keeps narration rare; this strip is the
+	// backstop for leaked tool names.
 	narrateRe = regexp.MustCompile(`(?im)^\s*(calling|checking|searching|fetching|looking up)\s+(search_\w+|war_status|planet_status|wiki_search)\b[^\n.]{0,12}\.?(?:\n|$)`)
 	sourceRe  = regexp.MustCompile(`(?i)\[source:\s*([^\]]+)\]`)
 	// spaceRe/blankRe collapse whitespace left behind by the strips above.
