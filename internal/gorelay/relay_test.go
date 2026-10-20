@@ -487,14 +487,15 @@ func TestToolOutputCapped(t *testing.T) {
 		t.Fatal("overlong output must be truncated")
 	}
 	if !strings.Contains(got, "[tool output truncated]") {
-		t.Fatalf("truncation must be explicit, got tail %q", got[len(got)-30:])
+		tail := []rune(got)
+		t.Fatalf("truncation must be explicit, got tail %q", string(tail[len(tail)-30:]))
 	}
 
 	// End to end: the function_call_output in round 2 carries the cap.
-	var rounds int64
+	var rounds atomic.Int64
 	var round2 atomic.Value // string, race-safe across handler/test goroutines
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if atomic.AddInt64(&rounds, 1) == 1 {
+		if rounds.Add(1) == 1 {
 			_, _ = w.Write([]byte(`{"output":[{"type":"function_call","call_id":"call_1","name":"wiki_search","arguments":"{}"}]}`))
 			return
 		}
@@ -510,7 +511,10 @@ func TestToolOutputCapped(t *testing.T) {
 	c.ChatWithTools(context.Background(), "", "q?", nil, "s",
 		[]ToolDef{{Name: "wiki_search"}},
 		func(ctx context.Context, name, args string) string { return big })
-	body, _ := round2.Load().(string)
+	body, ok := round2.Load().(string)
+	if !ok {
+		t.Fatal("round 2 never ran")
+	}
 	if !strings.Contains(body, "[tool output truncated]") {
 		t.Fatal("round 2 must carry the capped tool output")
 	}

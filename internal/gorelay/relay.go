@@ -452,11 +452,17 @@ func (c *Client) ChatWithTools(ctx context.Context, system, query string, histor
 // never a silent cut.
 const maxToolOutputRunes = 2000
 
-// capToolOutput truncates overlong tool results to maxToolOutputRunes
-// (rune-safe). Short results pass through untouched.
+// capToolOutput truncates overlong tool results to maxToolOutputRunes.
+// The rune count runs over the string without materializing a []rune, so
+// a megabyte-size wiki fetch costs one pass, not two allocs. Short
+// results pass through untouched.
 func capToolOutput(out string) string {
-	if r := []rune(out); len(r) > maxToolOutputRunes {
-		return string(r[:maxToolOutputRunes]) + "…[tool output truncated]"
+	n := 0
+	for i := range out {
+		if n == maxToolOutputRunes {
+			return out[:i] + "…[tool output truncated]"
+		}
+		n++
 	}
 	return out
 }
