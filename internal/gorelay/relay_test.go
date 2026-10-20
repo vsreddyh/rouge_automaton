@@ -221,6 +221,7 @@ func TestIsLookupAck(t *testing.T) {
 		"Checking in, diver. Over.",
 		"Hulk. Rear vent. Over.",
 		"FURY: Humans 0.0% — 0 divers. Over.",
+		"Pulling back from the front. Over.",
 		Dead,
 		"The Lost Son is busy spreading democracy on Cyberstan. Hold position, Helldiver — try again shortly. Estimated time of liberation: 7s.",
 	} {

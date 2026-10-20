@@ -131,6 +131,9 @@ func (e *Executor) Execute(ctx context.Context, name, argsJSON string) string {
 		docs := SearchWorld(ctx, e.DB, query, k)
 		return withEmptyHint(FormatContext(docs), query)
 	case "planet_status":
+		if e.Live == nil {
+			return "live war API not wired — report the uplink as down, never guess"
+		}
 		if line := e.Live.PlanetLine(ctx, strArg(args, "name")); line != "" {
 			return line
 		}
@@ -146,6 +149,9 @@ func (e *Executor) Execute(ctx context.Context, name, argsJSON string) string {
 	case "wiki_search":
 		if query == "" {
 			return "wiki_search needs a query"
+		}
+		if e.Wiki == nil {
+			return "wiki client not wired — report it as unconfirmed"
 		}
 		if res := e.Wiki.SearchFetch(ctx, query); res != "" {
 			return res

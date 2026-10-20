@@ -135,7 +135,7 @@ func factionLabel(s string) string {
 		return "Automatons"
 	case "terminid", "terminids":
 		return "Terminids"
-	case "illuminate":
+	case "illuminate", "illuminates":
 		return "Illuminate"
 	}
 	return strings.TrimSpace(s)

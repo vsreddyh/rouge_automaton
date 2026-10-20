@@ -41,4 +41,13 @@ func TestExecuteUnknownAndBadArgs(t *testing.T) {
 	if got := e.Execute(t.Context(), "war_status", `{}`); !strings.Contains(got, "not wired") {
 		t.Fatalf("nil live client: %q", got)
 	}
+	// Same guard must cover planet_status: PlanetLine derefs the client's
+	// mutex, so an unwired Live would panic on &Executor{}.
+	if got := e.Execute(t.Context(), "planet_status", `{"name":"Mintoria"}`); !strings.Contains(got, "not wired") {
+		t.Fatalf("nil live client on planet_status: %q", got)
+	}
+	// Same for an unwired wiki client.
+	if got := e.Execute(t.Context(), "wiki_search", `{"query":"hulk"}`); !strings.Contains(got, "not wired") {
+		t.Fatalf("nil wiki client: %q", got)
+	}
 }
