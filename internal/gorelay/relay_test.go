@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -263,7 +264,7 @@ func TestChatWithToolsExhausted(t *testing.T) {
 	rounds := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		rounds++
-		w.Write([]byte(`{"output":[{"type":"function_call","call_id":"call_` + string(rune('0'+rounds)) + `","name":"search_gear","arguments":"{}"}]}`))
+		w.Write([]byte(`{"output":[{"type":"function_call","call_id":"call_` + strconv.Itoa(rounds) + `","name":"search_gear","arguments":"{}"}]}`))
 	}))
 	defer srv.Close()
 	c := &Client{BaseURL: srv.URL, HTTP: srv.Client()}
@@ -324,6 +325,71 @@ func TestChatWithToolsBusyNoRetry(t *testing.T) {
 	}
 	if rounds != 1 {
 		t.Fatalf("busy must not retry, got %d rounds", rounds)
+	}
+}
+
+// TestChatWithToolsDoubleEmptyNoSecondRetry bounds the retry: two blank
+// envelopes in a row still resolve to Dead after exactly one retry.
+func TestChatWithToolsDoubleEmptyNoSecondRetry(t *testing.T) {
+	rounds := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rounds++
+		w.Write([]byte(`{"output":[]}`))
+	}))
+	defer srv.Close()
+	c := &Client{BaseURL: srv.URL, HTTP: srv.Client()}
+	got := c.ChatWithTools(context.Background(), "", "who are you?", nil, "s", nil,
+		func(ctx context.Context, name, args string) string { return "" })
+	if got != Dead {
+		t.Fatalf("double-empty must stay Dead, got %q", got)
+	}
+	if rounds != 2 {
+		t.Fatalf("must retry exactly once, got %d rounds", rounds)
+	}
+}
+
+// TestChatWithToolsReasoningOnlyRetry covers the ok-shaped empty: a
+// reasoning-only first round (items, no text, no calls) retries once.
+func TestChatWithToolsReasoningOnlyRetry(t *testing.T) {
+	rounds := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rounds++
+		if rounds == 1 {
+			w.Write([]byte(`{"output":[{"type":"reasoning","call_id":"","name":""}]}`))
+			return
+		}
+		w.Write([]byte(`{"output":[{"type":"message","content":[{"type":"output_text","text":"Hi. Over."}]}]}`))
+	}))
+	defer srv.Close()
+	c := &Client{BaseURL: srv.URL, HTTP: srv.Client()}
+	got := c.ChatWithTools(context.Background(), "", "who are you?", nil, "s", nil,
+		func(ctx context.Context, name, args string) string { return "" })
+	if got != "Hi. Over." {
+		t.Fatalf("reasoning-only first round must retry to an answer, got %q", got)
+	}
+	if rounds != 2 {
+		t.Fatalf("must retry once after a reasoning-only round, got %d rounds", rounds)
+	}
+}
+
+// TestChatWithToolsHardErrorNoRetry guards the retryable flag: a backend
+// error envelope is Dead but never retried, so a persistent outage costs
+// one request per turn, not two.
+func TestChatWithToolsHardErrorNoRetry(t *testing.T) {
+	rounds := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rounds++
+		w.Write([]byte(`{"type":"error","error":{"type":"CreditsError"}}`))
+	}))
+	defer srv.Close()
+	c := &Client{BaseURL: srv.URL, HTTP: srv.Client()}
+	got := c.ChatWithTools(context.Background(), "", "who are you?", nil, "s", nil,
+		func(ctx context.Context, name, args string) string { return "" })
+	if got != Dead {
+		t.Fatalf("backend error must be Dead, got %q", got)
+	}
+	if rounds != 1 {
+		t.Fatalf("hard-error Dead must not retry, got %d rounds", rounds)
 	}
 }
 

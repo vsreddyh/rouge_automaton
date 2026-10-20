@@ -132,11 +132,16 @@ func decodeResponse(resp *http.Response, v any) error {
 // roundResult is one decoded Responses-API round: either a canned reply
 // (ok=false) or actionable output items (ok=true). text carries narration
 // co-present with tool calls — context for the next round, never an answer.
+// retryable marks a well-formed but content-free Dead envelope: the only
+// !ok Dead that ChatWithTools may retry once. Transport, decode, and
+// backend-error Dead replies are never retryable, so a persistent outage
+// costs one request per turn, not two.
 type roundResult struct {
-	reply string
-	ok    bool
-	items []outputItem
-	text  string
+	reply     string
+	ok        bool
+	items     []outputItem
+	text      string
+	retryable bool
 }
 
 // doRound POSTs one request body and decodes the response. Transport,
@@ -259,7 +264,10 @@ func (c *Client) doRound(ctx context.Context, url, session string, body []byte) 
 		return roundResult{ok: true, items: items}
 	}
 	// Well-formed but content-free response: Dead, not an empty Discord post.
-	return roundResult{reply: Dead}
+	// Retryable: a single blank envelope may be transient, so the tool loop
+	// gets one retry on the first round. Hard failures above stay
+	// non-retryable.
+	return roundResult{reply: Dead, retryable: true}
 }
 
 // Probe checks model-backend reachability with a minimal 1-token request.
@@ -369,11 +377,12 @@ func (c *Client) ChatWithTools(ctx context.Context, system, query string, histor
 			"reasoning": map[string]any{"effort": "low"},
 		})
 		res := c.doRound(ctx, url, session, body)
-		if round == 0 && isEmptyFirstRound(res) {
+		if round == 0 && isEmptyFirstRound(res) && ctx.Err() == nil {
 			// One retry for no-tool turns that come back empty: a single
-			// blank envelope must not fail an answerable question. Busy
-			// never lands here (isEmptyFirstRound matches Dead only), so
-			// throttled turns still return immediately without a retry.
+			// blank envelope may be transient and must not fail an
+			// answerable question. Only content-free empties land here —
+			// Busy and hard-error Dead replies are never retryable, so
+			// throttled or broken backends still return after one request.
 			log.Printf("gorelay: empty first round, retrying session=%s query=%q", session, trunc(query, 120))
 			res = c.doRound(ctx, url, session, body)
 		}
@@ -429,13 +438,14 @@ func (c *Client) ChatWithTools(ctx context.Context, system, query string, histor
 	return Exhausted
 }
 
-// isEmptyFirstRound reports whether res carries no answer and no tool call:
-// a Dead envelope (!ok with Dead reply — Busy excluded) or an ok round with
-// neither text nor function calls (reasoning-only items). Only the first
-// round qualifies for the retry in ChatWithTools.
+// isEmptyFirstRound reports whether res carries no answer and no tool call
+// and is safe to retry once: a retryable content-free Dead envelope (!ok
+// with retryable set in doRound — Busy and hard-error Dead excluded) or an
+// ok round with neither text nor function calls (reasoning-only items).
+// Only the first round qualifies for the retry in ChatWithTools.
 func isEmptyFirstRound(res roundResult) bool {
 	if !res.ok {
-		return res.reply == Dead
+		return res.retryable
 	}
 	if res.text != "" {
 		return false
