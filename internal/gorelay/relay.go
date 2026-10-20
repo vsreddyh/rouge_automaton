@@ -294,8 +294,10 @@ const ackNudge = "You said you would check — now emit the function_call. No pr
 
 // lookupAckRe spots narrated intent: a lookup verb with a lookup object.
 // Verb-only is not enough ("checking in, diver" is a greeting); the object
-// noun keeps greetings and finished answers out of the nudge path.
-var lookupAckRe = regexp.MustCompile(`(?i)\b(checking|looking up|looking into|searching|fetching|pulling up|verifying|confirming)\b.{0,80}?\b(status|intel|records|database|wiki|archives|front|lines|data|info|entry|manifest)\b`)
+// noun keeps greetings and finished answers out of the nudge path. "pulling"
+// without "up" is included because "pulling war status" stranded a real
+// war-status question in production.
+var lookupAckRe = regexp.MustCompile(`(?i)\b(checking|looking up|looking into|searching|fetching|pulling up|pulling|scanning|querying|retrieving|reading|consulting|verifying|confirming)\b.{0,80}?\b(status|intel|records|database|wiki|archives|front|lines|data|info|entry|manifest)\b`)
 
 // isLookupAck reports whether s narrates a lookup instead of answering.
 // Canned backend replies are never acks, even if they share a word.

@@ -38,8 +38,8 @@ func TestServerToolsEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(tools.Tools) != 5 {
-		t.Fatalf("want 5 tools, got %d", len(tools.Tools))
+	if len(tools.Tools) != 6 {
+		t.Fatalf("want 6 tools, got %d", len(tools.Tools))
 	}
 
 	res, err := session.CallTool(t.Context(), &mcp.CallToolParams{

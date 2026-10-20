@@ -7,8 +7,8 @@ import (
 
 func TestToolDefs(t *testing.T) {
 	defs := ToolDefs()
-	if len(defs) != 5 {
-		t.Fatalf("want 5 tools, got %d", len(defs))
+	if len(defs) != 6 {
+		t.Fatalf("want 6 tools, got %d", len(defs))
 	}
 	seen := map[string]bool{}
 	for _, d := range defs {
@@ -36,5 +36,9 @@ func TestExecuteUnknownAndBadArgs(t *testing.T) {
 	// Nil DB would panic on search; unknown-arg paths must not reach it.
 	if got := e.Execute(t.Context(), "wiki_search", `{}`); !strings.Contains(got, "needs a query") {
 		t.Fatalf("empty wiki query: %q", got)
+	}
+	// war_status must fail closed without a live client, never panic.
+	if got := e.Execute(t.Context(), "war_status", `{}`); !strings.Contains(got, "not wired") {
+		t.Fatalf("nil live client: %q", got)
 	}
 }

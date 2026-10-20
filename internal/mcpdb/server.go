@@ -35,7 +35,7 @@ func textResult(text string) (*mcp.CallToolResult, any, error) {
 	return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: text}}}, nil, nil
 }
 
-// NewServer registers the five intel tools over backend and returns a
+// NewServer registers the six intel tools over backend and returns a
 // server ready to Run on any transport (stdio in production).
 func NewServer(backend ToolBackend) *mcp.Server {
 	server := mcp.NewServer(&mcp.Implementation{Name: "rouge-mcpdb", Version: "1.0.0"}, nil)
@@ -48,6 +48,10 @@ func NewServer(backend ToolBackend) *mcp.Server {
 	addSearch("search_units", "Search enemy units and structures (weak points, counters, health, anatomy). Use for any 'how to kill X' question.")
 	addSearch("search_gear", "Search weapons, stratagems, armor and boosters (damage, cooldowns, costs). Use for loadout questions.")
 	addSearch("search_world", "Search biomes, planets, missions, difficulties and effects. Use for where-to-fight questions.")
+	mcp.AddTool(server, &mcp.Tool{Name: "war_status", Description: "Live galactic war status: active fronts, hottest battles, divers deployed. No arguments."},
+		func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, any, error) {
+			return textResult(backend.Execute(ctx, "war_status", "{}"))
+		})
 	mcp.AddTool(server, &mcp.Tool{Name: "planet_status", Description: "Live war status for one planet: owner, liberation percent, active divers."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, args nameArgs) (*mcp.CallToolResult, any, error) {
 			return textResult(backend.Execute(ctx, "planet_status", toJSON(args)))

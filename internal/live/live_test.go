@@ -42,6 +42,68 @@ func TestPlanetLineDefenseEvent(t *testing.T) {
 	}
 }
 
+// TestWarStatus covers the generic "what's the war status" question: no
+// planet name is supplied or needed, and the summary names active fronts,
+// the faction tally (zero included), the busiest battle first, and total
+// divers.
+func TestWarStatus(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`[` +
+			`{"name":"FURY","currentOwner":"Humans","health":2000000,"maxHealth":2000000,"players":3100,` +
+			`"event":{"eventType":1,"faction":"Automaton","health":1336106,"maxHealth":1500000,"endTime":"2026-09-20T13:00:56Z"}},` +
+			`{"name":"Mintoria","currentOwner":"Humans","health":880000,"maxHealth":1000000,"players":900,` +
+			`"event":{"eventType":0,"faction":"Automaton","health":880000,"maxHealth":1000000}},` +
+			`{"name":"Turing","currentOwner":"Humans","health":1000000,"maxHealth":1000000,"players":5}` +
+			`]`))
+	}))
+	defer srv.Close()
+	c := &Client{Base: srv.URL, Contact: "t", Client: "t", HTTP: srv.Client()}
+	got := c.WarStatus(context.Background())
+	for _, want := range []string{
+		"2 active fronts",
+		"Automatons 2, Terminids 0, Illuminate 0",
+		"FURY defense vs Automatons, 10.9% repelled, ends Sep 20, 3100 divers",
+		"Mintoria campaign vs Automatons, 12.0% liberated, 900 divers",
+		"4005 divers deployed",
+		"Over.",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("want %q in %q", want, got)
+		}
+	}
+	// Busiest front leads the list.
+	if i, j := strings.Index(got, "FURY"), strings.Index(got, "Mintoria"); i < 0 || j < 0 || i > j {
+		t.Fatalf("busiest front must come first: %q", got)
+	}
+	// Non-event planets still count divers but are not fronts.
+	if strings.Contains(got, "Turing") {
+		t.Fatalf("quiet planet must not appear as a front: %q", got)
+	}
+}
+
+func TestWarStatusQuiet(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`[{"name":"Turing","currentOwner":"Humans","health":1000000,"maxHealth":1000000,"players":5}]`))
+	}))
+	defer srv.Close()
+	c := &Client{Base: srv.URL, HTTP: srv.Client()}
+	got := c.WarStatus(context.Background())
+	if !strings.Contains(got, "no active fronts") || !strings.Contains(got, "5 divers deployed") {
+		t.Fatalf("quiet war: %q", got)
+	}
+}
+
+func TestWarStatusNoData(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(500)
+	}))
+	defer srv.Close()
+	c := &Client{Base: srv.URL, HTTP: srv.Client()}
+	if got := c.WarStatus(context.Background()); got != "" {
+		t.Fatalf("no data must return empty, got %q", got)
+	}
+}
+
 func TestCacheSurvivesOutage(t *testing.T) {
 	calls := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

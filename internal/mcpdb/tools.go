@@ -24,10 +24,14 @@ import (
 const ToolGuidance = `
 Tool procedure: for any factual question (units, gear, places, war status),
 call the matching search tool BEFORE answering — never answer from memory.
+War status ("war status", "how goes the war", "what's the front") is one
+war_status call with no arguments: never ask which planet or target the user
+means, and never stall on an ack. Never ask the user to clarify or restate
+the question — resolve it yourself with tools.
 Never narrate intent ("Checking...", "Looking it up..."): either emit the
 function call or the final answer — an ack without a call strands the user.
-You may chain calls (e.g. search_units, then planet_status for the same
-front). Every intel answer names weak point + counter + source, stays under
+You may chain calls (e.g. search_units, then planet_status for one planet).
+Every intel answer names weak point + counter + source, stays under
 120 words, and ends with "Over." on its own beat. If a tool returns no
 results, say what is unconfirmed and try wiki_search before giving up.`
 
@@ -57,6 +61,10 @@ func ToolDefs() []gorelay.ToolDef {
 		return map[string]any{"type": "string", "description": desc}
 	}
 	obj := func(props map[string]any, required ...string) map[string]any {
+		if required == nil {
+			// No-arg tools must marshal "required" as [] rather than null.
+			required = []string{}
+		}
 		return map[string]any{"type": "object", "properties": props, "required": required}
 	}
 	kProp := map[string]any{"type": "integer", "description": "max docs to return (default 3, max 5)"}
@@ -80,6 +88,9 @@ func ToolDefs() []gorelay.ToolDef {
 				"query": strProp("place, biome, mission or effect keywords, e.g. Tundra"),
 				"k":     kProp,
 			}, "query")},
+		{Name: "war_status",
+			Description: "Live galactic war status: active fronts per faction, hottest battles, divers deployed. Takes no arguments — use for any generic war-status question instead of asking the user for a planet.",
+			Parameters:  obj(map[string]any{})},
 		{Name: "planet_status",
 			Description: "Live war status for one planet: owner, liberation percent, active divers. Use for who-owns / status questions.",
 			Parameters: obj(map[string]any{
@@ -124,6 +135,14 @@ func (e *Executor) Execute(ctx context.Context, name, argsJSON string) string {
 			return line
 		}
 		return "no live status for that planet — check the spelling or try wiki_search"
+	case "war_status":
+		if e.Live == nil {
+			return "live war API not wired — report the uplink as down, never guess"
+		}
+		if line := e.Live.WarStatus(ctx); line != "" {
+			return line
+		}
+		return "live war API unreachable — report the uplink as down, never guess a war status"
 	case "wiki_search":
 		if query == "" {
 			return "wiki_search needs a query"
@@ -133,7 +152,7 @@ func (e *Executor) Execute(ctx context.Context, name, argsJSON string) string {
 		}
 		return "wiki has nothing on that either — report it as unconfirmed"
 	default:
-		return fmt.Sprintf("unknown tool %q — available: search_units, search_gear, search_world, planet_status, wiki_search", name)
+		return fmt.Sprintf("unknown tool %q — available: search_units, search_gear, search_world, war_status, planet_status, wiki_search", name)
 	}
 }
 
