@@ -93,7 +93,11 @@ func TestIntArgShapes(t *testing.T) {
 		{float64(4), 4},
 		{float32(3), 3},
 		{2, 2},
+		{int32(6), 6},
 		{int64(5), 5},
+		{"7", 7},
+		{"4.5", 4},
+		{json.Number("9"), 9},
 	} {
 		if got := intArg(map[string]any{"k": tc.v}, "k", 3); got != tc.want {
 			t.Fatalf("intArg(%v) = %d, want %d", tc.v, got, tc.want)
@@ -101,6 +105,9 @@ func TestIntArgShapes(t *testing.T) {
 	}
 	if got := intArg(map[string]any{}, "k", 3); got != 3 {
 		t.Fatalf("missing k must default, got %d", got)
+	}
+	if got := intArg(map[string]any{"k": "nope"}, "k", 3); got != 3 {
+		t.Fatalf("unparseable k must default, got %d", got)
 	}
 }
 

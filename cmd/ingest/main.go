@@ -57,11 +57,15 @@ func main() {
 
 // ensureIndexes creates the unique indexes the exact tools rely on:
 // (faction, name) for units and structures, name for gear and world
-// collections. Idempotent: CreateOne is a no-op when the index exists.
+// collections. Strength-2 collation makes uniqueness case-insensitive to
+// match the server-side exact lookup (normalize/isExactMatch); without it
+// "Hulk" and "hulk" could both insert and the winner would be sort order.
+// Idempotent: CreateOne is a no-op when the index exists.
 func ensureIndexes(ctx context.Context, db *mongo.Database) error {
 	pair := mongo.IndexModel{
-		Keys:    bson.D{{Key: "faction", Value: 1}, {Key: "name", Value: 1}},
-		Options: options.Index().SetUnique(true),
+		Keys: bson.D{{Key: "faction", Value: 1}, {Key: "name", Value: 1}},
+		Options: options.Index().SetUnique(true).
+			SetCollation(&options.Collation{Locale: "en", Strength: 2}),
 	}
 	for _, coll := range []string{"units", "structures"} {
 		if _, err := db.Collection(coll).Indexes().CreateOne(ctx, pair); err != nil {
@@ -69,8 +73,9 @@ func ensureIndexes(ctx context.Context, db *mongo.Database) error {
 		}
 	}
 	single := mongo.IndexModel{
-		Keys:    bson.D{{Key: "name", Value: 1}},
-		Options: options.Index().SetUnique(true),
+		Keys: bson.D{{Key: "name", Value: 1}},
+		Options: options.Index().SetUnique(true).
+			SetCollation(&options.Collation{Locale: "en", Strength: 2}),
 	}
 	for _, coll := range []string{"weapons", "stratagems", "armor", "boosters",
 		"biomes", "planets", "missions", "difficulty", "effects"} {
@@ -129,9 +134,9 @@ func run() error {
 		known := map[string][]string{}
 		for _, d := range found {
 			if n, ok := d["name"].(string); ok {
-				// Alias fields come in every writer shape (bson.A from
-				// mongo, []any/[]string from JSON decodes); coerce like
-				// strList so covered() never silently misses.
+				// Alias fields come in every writer shape; coerce the same
+				// scalar set toString accepts so covered() never silently
+				// misses a differently-shaped doc.
 				var raw []any
 				switch a := d["aliases"].(type) {
 				case bson.A:
@@ -143,19 +148,24 @@ func run() error {
 					for i, s := range a {
 						raw[i] = s
 					}
+				case json.Number:
+					raw = []any{string(a)}
+				case bson.D:
+					for _, e := range a {
+						raw = append(raw, e.Value)
+					}
 				}
 				var al []string
 				for _, e := range raw {
-					// Coerce every writer shape (numerics included) and
-					// trim: covered() matches on trimmed toks, so an
-					// untrimmed alias would silently miss.
 					var s string
 					switch t := e.(type) {
 					case string:
 						s = t
-					case int, int8, int16, int32, int64,
+					case bool,
+						int, int8, int16, int32, int64,
 						uint, uint8, uint16, uint32, uint64,
-						float32, float64:
+						float32, float64,
+						json.Number:
 						s = fmt.Sprint(t)
 					default:
 						continue
@@ -164,7 +174,7 @@ func run() error {
 						al = append(al, strings.ToLower(s))
 					}
 				}
-				known[strings.ToLower(n)] = al
+				known[strings.ToLower(strings.TrimSpace(n))] = al
 			}
 		}
 		return known, nil

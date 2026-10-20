@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"go.mongodb.org/mongo-driver/v2/mongo"
@@ -237,23 +238,18 @@ func strArg(args map[string]any, key string) string {
 }
 
 func intArg(args map[string]any, key string, def int) int {
-	// Same hardening as live.num: JSON decode gives float64 today, but the
-	// switch keeps the limit sane if a caller ever passes int shapes.
-	switch v := args[key].(type) {
-	case float64:
-		return int(v)
-	case float32:
-		return int(v)
-	case int:
-		return v
-	case int32:
-		return int(v)
-	case int64:
-		return int(v)
-	case json.Number:
-		if n, err := v.Int64(); err == nil {
-			return int(n)
-		}
+	// Coerce through the same toString gate the store uses, so every JSON
+	// number shape (and numeric strings) resolves; clampLimit makes the
+	// result safe and unparseable input falls back to the default.
+	s := strings.TrimSpace(toString(args[key]))
+	if s == "" {
+		return def
+	}
+	if n, err := strconv.Atoi(s); err == nil {
+		return n
+	}
+	if f, err := strconv.ParseFloat(strings.ReplaceAll(s, ",", ""), 64); err == nil {
+		return int(f)
 	}
 	return def
 }
