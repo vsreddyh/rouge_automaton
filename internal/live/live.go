@@ -264,7 +264,7 @@ func joinRoster(campaign []map[string]any, status, info map[string]any, names ma
 			}
 			if exp := num(camp, "expireDateTime"); exp > 0 {
 				sec, frac := math.Modf(exp)
-				ev["endTime"] = time.Unix(int64(sec), int64(frac*1e9)).UTC().Format(time.RFC3339)
+				ev["endTime"] = time.Unix(int64(sec), int64(frac*1e9)).UTC().Format(time.RFC3339Nano)
 			}
 			p["event"] = ev
 		}
@@ -306,6 +306,10 @@ func num(m map[string]any, key string) float64 {
 		return float64(v)
 	case json.Number:
 		if f, err := v.Float64(); err == nil {
+			return f
+		}
+	case string:
+		if f, err := strconv.ParseFloat(strings.TrimSpace(v), 64); err == nil {
 			return f
 		}
 	}
