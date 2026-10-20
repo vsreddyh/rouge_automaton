@@ -53,6 +53,8 @@ func TestWarStatus(t *testing.T) {
 			`"event":{"eventType":1,"faction":"Automaton","health":1336106,"maxHealth":1500000,"endTime":"2026-09-20T13:00:56Z"}},` +
 			`{"name":"Mintoria","currentOwner":"Humans","health":880000,"maxHealth":1000000,"players":900,` +
 			`"event":{"eventType":0,"faction":"Automaton","health":880000,"maxHealth":1000000}},` +
+			`{"name":"","currentOwner":"Humans","health":100000,"maxHealth":1000000,"players":50,` +
+			`"event":{"eventType":0,"faction":"Terminid","health":100000,"maxHealth":1000000}},` +
 			`{"name":"Turing","currentOwner":"Humans","health":1000000,"maxHealth":1000000,"players":5}` +
 			`]`))
 	}))
@@ -64,7 +66,7 @@ func TestWarStatus(t *testing.T) {
 		"Automatons 2, Terminids 0, Illuminate 0",
 		"FURY defense vs Automatons, 10.9% repelled, ends Sep 20, 3100 divers",
 		"Mintoria campaign vs Automatons, 12.0% liberated, 900 divers",
-		"4005 divers deployed",
+		"4055 divers deployed",
 		"Over.",
 	} {
 		if !strings.Contains(got, want) {

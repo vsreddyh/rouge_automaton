@@ -297,8 +297,10 @@ const ackNudge = "You said you would check — now emit the function_call. No pr
 // noun keeps greetings and finished answers out of the nudge path. "pulling"
 // is constrained to lookup objects ("pulling war status", "pulling up ...")
 // so "pulling back from the front" never nudges a finished answer into an
-// extra tool round.
-var lookupAckRe = regexp.MustCompile(`(?i)\b(?:checking|looking up|looking into|searching|fetching|pulling\s+(?:up|the|war|live|latest|current)|verifying|confirming)\b.{0,80}?\b(status|intel|records|database|wiki|archives|front|lines|data|info|entry|manifest)\b`)
+// extra tool round. "calling" is included for symmetry with the sanitize
+// narration strip ("Calling war status ...") — same false-positive guard
+// applies via the object noun.
+var lookupAckRe = regexp.MustCompile(`(?i)\b(?:calling|checking|looking up|looking into|searching|fetching|pulling\s+(?:up|the|war|live|latest|current)|verifying|confirming)\b.{0,80}?\b(status|intel|records|database|wiki|archives|front|lines|data|info|entry|manifest)\b`)
 
 // isLookupAck reports whether s narrates a lookup instead of answering.
 // Canned backend replies are never acks, even if they share a word.

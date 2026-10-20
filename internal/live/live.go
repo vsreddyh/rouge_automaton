@@ -197,10 +197,15 @@ func (c *Client) WarStatus(ctx context.Context) string {
 		if faction == "" || emax <= 0 {
 			continue
 		}
+		name := str(p, "name")
+		if strings.TrimSpace(name) == "" {
+			// Nameless payload entries carry no addressable front.
+			continue
+		}
 		label := factionLabel(faction)
 		counts[label]++
 		f := warFront{
-			name: str(p, "name"), label: label, kind: "campaign",
+			name: name, label: label, kind: "campaign",
 			pct: 100 * (1 - ehealth/emax), players: num(p, "players"),
 		}
 		if num(ev, "eventType") == 1 {

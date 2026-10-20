@@ -65,4 +65,28 @@ func TestServerToolsEndToEnd(t *testing.T) {
 		!strings.Contains(stub.calls[0][1], `"faction":"automatons"`) {
 		t.Fatalf("backend calls = %v", stub.calls)
 	}
+	// war_status takes no arguments: the no-arg handler must survive the
+	// protocol round trip (empty struct decode) and reach the backend.
+	wres, err := session.CallTool(t.Context(), &mcp.CallToolParams{
+		Name:      "war_status",
+		Arguments: map[string]any{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if wres.IsError {
+		t.Fatal("war_status call flagged error")
+	}
+	wtext := ""
+	for _, c := range wres.Content {
+		if tc, ok := c.(*mcp.TextContent); ok {
+			wtext += tc.Text
+		}
+	}
+	if wtext != "canned:war_status" {
+		t.Fatalf("war_status content = %q", wtext)
+	}
+	if len(stub.calls) != 2 || stub.calls[1][0] != "war_status" {
+		t.Fatalf("backend calls = %v", stub.calls)
+	}
 }

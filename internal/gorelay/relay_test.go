@@ -211,6 +211,7 @@ func TestIsLookupAck(t *testing.T) {
 		"Looking up Hulk intel. Over.",
 		"Searching the archives for railgun data. Over.",
 		"Helldiver, uplink holding — pulling war status. Over.",
+		"Calling war status now. Over.",
 	} {
 		if !isLookupAck(s) {
 			t.Errorf("want ack: %q", s)
@@ -219,6 +220,7 @@ func TestIsLookupAck(t *testing.T) {
 	for _, s := range []string{
 		"Hi. Over.",
 		"Checking in, diver. Over.",
+		"Calling all divers. Over.",
 		"Hulk. Rear vent. Over.",
 		"FURY: Humans 0.0% — 0 divers. Over.",
 		"Pulling back from the front. Over.",
