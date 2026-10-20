@@ -175,8 +175,8 @@ func nameTable(raw any) map[string]string {
 			key := strconv.Itoa(i)
 			switch n := v.(type) {
 			case map[string]any:
-				if f := num(n, "index"); f != 0 {
-					key = strconv.Itoa(int(f))
+				if _, ok := n["index"]; ok {
+					key = strconv.Itoa(int(num(n, "index")))
 				}
 				if s := str(n, "name"); s != "" {
 					out[key] = s
