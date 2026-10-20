@@ -163,24 +163,49 @@ func TestChatWithToolsNoCall(t *testing.T) {
 	}
 }
 
-// TestChatWithToolsAckNudge replays the Fury incident: round 1 narrates a
-// lookup with no function call, so the loop must nudge once and complete
-// the tool round instead of posting the ack.
-func TestChatWithToolsAckNudge(t *testing.T) {
+// TestChatWithToolsAckPassthrough pins the no-tripwire loop: round 1 text
+// with no function call behind it is the final answer, even when it reads
+// like a lookup ack. Telling that from a greeting takes content judgment;
+// the prompt ("function call or final answer") plus a valid tool for every
+// question is the whole defense now.
+func TestChatWithToolsAckPassthrough(t *testing.T) {
+	rounds := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rounds++
+		w.Write([]byte(`{"output":[{"type":"message","content":[{"type":"output_text","text":"Checking Fury's war status. Over."}]}]}`))
+	}))
+	defer srv.Close()
+	c := &Client{BaseURL: srv.URL, HTTP: srv.Client()}
+	called := false
+	got := c.ChatWithTools(context.Background(), "", "status of fury?", nil, "s",
+		[]ToolDef{{Name: "planet_status"}},
+		func(ctx context.Context, name, args string) string { called = true; return "" })
+	if got != "Checking Fury's war status. Over." {
+		t.Fatalf("first text must pass through as final, got %q", got)
+	}
+	if called || rounds != 1 {
+		t.Fatalf("no tool round must follow text: called=%v rounds=%d", called, rounds)
+	}
+}
+
+// TestChatWithToolsMixedRound pins the envelope rule: text beside a function
+// call is context, not final — the call executes and the loop continues,
+// instead of posting the narration and dropping the intel.
+func TestChatWithToolsMixedRound(t *testing.T) {
 	var bodies []string
 	round := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		raw, _ := io.ReadAll(r.Body)
 		bodies = append(bodies, string(raw))
 		round++
-		switch round {
-		case 1:
-			w.Write([]byte(`{"output":[{"type":"message","content":[{"type":"output_text","text":"Checking Fury's war status. Over."}]}]}`))
-		case 2:
-			w.Write([]byte(`{"output":[{"type":"function_call","call_id":"call_1","name":"planet_status","arguments":"{\"name\":\"FURY\"}"}]}`))
-		default:
-			w.Write([]byte(`{"output":[{"type":"message","content":[{"type":"output_text","text":"FURY: Humans 0.0% — 0 divers. Over."}]}]}`))
+		if round == 1 {
+			w.Write([]byte(`{"output":[` +
+				`{"type":"message","content":[{"type":"output_text","text":"On it, pulling the line. Over."}]},` +
+				`{"type":"function_call","call_id":"call_1","name":"planet_status","arguments":"{\"name\":\"FURY\"}"}` +
+				`]}`))
+			return
 		}
+		w.Write([]byte(`{"output":[{"type":"message","content":[{"type":"output_text","text":"FURY: Humans 0.0% — 0 divers. Over."}]}]}`))
 	}))
 	defer srv.Close()
 	c := &Client{BaseURL: srv.URL, HTTP: srv.Client()}
@@ -189,47 +214,19 @@ func TestChatWithToolsAckNudge(t *testing.T) {
 		[]ToolDef{{Name: "planet_status"}},
 		func(ctx context.Context, name, args string) string {
 			execCalls++
-			if name != "planet_status" {
-				t.Errorf("exec got %q", name)
-			}
 			return "FURY: Humans 0.0% — 0 divers. Over."
 		})
 	if got != "FURY: Humans 0.0% — 0 divers. Over." {
-		t.Fatalf("ack must be nudged into a tool round, got %q", got)
+		t.Fatalf("mixed round must complete the tool call, got %q", got)
 	}
-	if execCalls != 1 || len(bodies) != 3 {
-		t.Fatalf("exec=%d rounds=%d, want 1/3", execCalls, len(bodies))
+	if execCalls != 1 || len(bodies) != 2 {
+		t.Fatalf("exec=%d rounds=%d, want 1/2", execCalls, len(bodies))
 	}
-	if !strings.Contains(bodies[1], "Checking Fury") || !strings.Contains(bodies[1], "function_call") {
-		t.Fatalf("round 2 must carry ack + nudge, got %s", bodies[1][:200])
+	if !strings.Contains(bodies[1], "On it, pulling the line.") {
+		t.Fatalf("round 2 must carry the narration as context: %s", bodies[1][:200])
 	}
-}
-
-func TestIsLookupAck(t *testing.T) {
-	for _, s := range []string{
-		"Checking Fury's war status. Over.",
-		"Looking up Hulk intel. Over.",
-		"Searching the archives for railgun data. Over.",
-		"Helldiver, uplink holding — pulling war status. Over.",
-		"Calling war status now. Over.",
-	} {
-		if !isLookupAck(s) {
-			t.Errorf("want ack: %q", s)
-		}
-	}
-	for _, s := range []string{
-		"Hi. Over.",
-		"Checking in, diver. Over.",
-		"Calling all divers. Over.",
-		"Hulk. Rear vent. Over.",
-		"FURY: Humans 0.0% — 0 divers. Over.",
-		"Pulling back from the front. Over.",
-		Dead,
-		"The Lost Son is busy spreading democracy on Cyberstan. Hold position, Helldiver — try again shortly. Estimated time of liberation: 7s.",
-	} {
-		if isLookupAck(s) {
-			t.Errorf("must not nudge: %q", s)
-		}
+	if !strings.Contains(bodies[1], "function_call_output") {
+		t.Fatalf("round 2 must carry the tool output: %s", bodies[1][:200])
 	}
 }
 
