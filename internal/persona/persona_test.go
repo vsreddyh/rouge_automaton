@@ -161,6 +161,9 @@ func TestSanitize(t *testing.T) {
 		{"list units", "Roster. list_units(automatons) Hulk.", []string{"list_units("}, []string{"Hulk"}},
 		{"get gear", "Boom. get_gear(Railcannon) fires.", []string{"get_gear("}, []string{"fires"}},
 		{"get place", "Cold. get_place(Tundra) ice.", []string{"get_place("}, []string{"ice"}},
+		// Anchored narrateRe: narration verbs before non-tools are prose,
+		// not leaks — only the exact tool set strips.
+		{"narration non-tool kept", "Calling get_ready now\nRear vent.", []string{}, []string{"Calling get_ready", "Rear vent"}},
 	}
 	for _, c := range cases {
 		got := Postprocess(c.in)

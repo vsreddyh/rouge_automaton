@@ -6,6 +6,8 @@ package mcpdb
 
 import (
 	"context"
+	"fmt"
+	"log"
 	"sort"
 	"strconv"
 	"strings"
@@ -149,16 +151,18 @@ func FilterUnits(docs []bson.M, faction, role string) []bson.M {
 // findAll loads up to limit docs from a collection, excluding any embedding
 // vector (payload weight with no retrieval value at query time). Any
 // failure yields nil — the caller degrades to fewer docs rather than an
-// error reply.
+// error reply — with a debug log so silent Mongo outages stay visible in ops.
 func findAll(ctx context.Context, db *mongo.Database, coll string, filter bson.M, limit int64) []bson.M {
 	cur, err := db.Collection(coll).Find(ctx, filter,
 		options.Find().SetLimit(limit).SetProjection(bson.M{"embedding": 0}))
 	if err != nil {
+		log.Printf("mcpdb: find %s: %v", coll, err)
 		return nil
 	}
 	defer cur.Close(ctx)
 	var docs []bson.M
 	if err := cur.All(ctx, &docs); err != nil {
+		log.Printf("mcpdb: decode %s: %v", coll, err)
 		return nil
 	}
 	return docs
@@ -329,15 +333,11 @@ func FormatContext(docs []bson.M) string {
 		src := docSource(d)
 		weak := strings.Join(strList(d, "weak_points"), " ")
 		if weak == "" {
-			if e, ok := d["effect_text"].(string); ok {
-				weak = e
-			}
+			weak = toString(d["effect_text"])
 		}
 		counters := strings.Join(strList(d, "counters"), " ")
 		if counters == "" {
-			if p, ok := d["procurement"].(string); ok {
-				counters = p
-			}
+			counters = toString(d["procurement"])
 		}
 		lines = append(lines, "- "+docName(d)+": weak "+weak+" | counter "+counters+" [source: "+src+"]")
 	}
@@ -350,36 +350,32 @@ func FormatContext(docs []bson.M) string {
 // params). Single line, rune-capped, so it fits the tool-output budget.
 func FormatFull(d bson.M) string {
 	src := docSource(d)
-	role, _ := d["role"].(string)
+	role := toString(d["role"])
 	if role == "" {
-		if desc, _ := d["description"].(string); desc != "" {
+		if desc := toString(d["description"]); desc != "" {
 			role = desc
-		} else if note, _ := d["note"].(string); note != "" {
+		} else if note := toString(d["note"]); note != "" {
 			role = note
-		} else if wt, _ := d["wiki_text"].(string); wt != "" {
+		} else if wt := toString(d["wiki_text"]); wt != "" {
 			role = cut(wt, 200)
 		}
 	}
 	weak := strings.Join(strList(d, "weak_points"), "; ")
 	if weak == "" {
-		if e, ok := d["effect_text"].(string); ok && e != "" {
-			weak = e
-		}
+		weak = toString(d["effect_text"])
 	}
 	counters := strings.Join(strList(d, "counters"), "; ")
 	if counters == "" {
-		if p, ok := d["procurement"].(string); ok && p != "" {
-			counters = p
-		}
+		counters = toString(d["procurement"])
 	}
 	var extra []string
 	if h := healthOf(d); h != "" {
 		extra = append(extra, "health "+h)
 	}
-	if s, _ := d["size"].(string); s != "" {
+	if s := toString(d["size"]); s != "" {
 		extra = append(extra, "size "+s)
 	}
-	if md, _ := d["min_difficulty"].(string); md != "" {
+	if md := toString(d["min_difficulty"]); md != "" {
 		extra = append(extra, "difficulty "+md)
 	}
 	if a := anatomySummary(d); a != "" {
@@ -395,7 +391,7 @@ func FormatFull(d bson.M) string {
 		extra = append(extra, p)
 	}
 	line := "- " + docName(d)
-	if f, _ := d["faction"].(string); f != "" {
+	if f := toString(d["faction"]); f != "" {
 		line += " [" + f + "]"
 	}
 	if role != "" {
@@ -413,6 +409,26 @@ func FormatFull(d bson.M) string {
 	return line + " [source: " + src + "]"
 }
 
+// toString coerces a doc value to text: strings pass through, numerics and
+// bools render via fmt.Sprint, nil and other shapes read empty. Keeps rich
+// excerpts from silently dropping wiki-crawl numerics.
+func toString(v any) string {
+	if s, ok := v.(string); ok {
+		return s
+	}
+	switch v.(type) {
+	case nil:
+		return ""
+	case bool,
+		int, int8, int16, int32, int64,
+		uint, uint8, uint16, uint32, uint64,
+		float32, float64:
+		return fmt.Sprint(v)
+	default:
+		return ""
+	}
+}
+
 // healthOf reads health stored as BSON numerics or a comma-grouped string.
 func healthOf(d bson.M) string {
 	switch v := d["health"].(type) {
@@ -426,19 +442,19 @@ func healthOf(d bson.M) string {
 		}
 	case int64:
 		if v > 0 {
-			return strconv.Itoa(int(v))
+			return strconv.FormatInt(v, 10)
 		}
 	case uint:
 		if v > 0 {
-			return strconv.Itoa(int(v))
+			return strconv.FormatUint(uint64(v), 10)
 		}
 	case uint32:
 		if v > 0 {
-			return strconv.Itoa(int(v))
+			return strconv.FormatUint(uint64(v), 10)
 		}
 	case uint64:
 		if v > 0 {
-			return strconv.Itoa(int(v))
+			return strconv.FormatUint(v, 10)
 		}
 	case float32:
 		if v > 0 {
@@ -456,11 +472,12 @@ func healthOf(d bson.M) string {
 	return ""
 }
 
-// anatomyRow reads one anatomy row stored as BSON or plain maps.
+// anatomyRow reads one anatomy row stored as BSON or plain maps,
+// coercing non-string AV/fatal numerics instead of dropping them.
 func anatomyRow(m map[string]any) (part, av, fatal string) {
-	part, _ = m["part"].(string)
-	av, _ = m["av"].(string)
-	fatal, _ = m["fatal"].(string)
+	part = toString(m["part"])
+	av = toString(m["av"])
+	fatal = toString(m["fatal"])
 	return part, av, fatal
 }
 
@@ -526,14 +543,15 @@ func conditionsSummary(d bson.M) string {
 			parts = append(parts, k+" "+strings.Join(items, ", "))
 		}
 	}
-	if a, _ := d["archetype"].(string); a != "" {
+	if a := toString(d["archetype"]); a != "" {
 		parts = append(parts, "archetype "+a)
 	}
 	return strings.Join(parts, "; ")
 }
 
 // paramsSummary renders generic gear/world infobox params as k=v pairs,
-// accepting BSON and plain decoded shapes.
+// accepting BSON and plain decoded shapes and coercing non-string values
+// instead of dropping them.
 func paramsSummary(d bson.M) string {
 	var m map[string]any
 	switch v := d["params"].(type) {
@@ -544,9 +562,7 @@ func paramsSummary(d bson.M) string {
 	case bson.D:
 		m = map[string]any{}
 		for _, e := range v {
-			if s, ok := e.Value.(string); ok {
-				m[e.Key] = s
-			}
+			m[e.Key] = e.Value
 		}
 	default:
 		return ""
@@ -561,7 +577,7 @@ func paramsSummary(d bson.M) string {
 	sort.Strings(keys)
 	var pairs []string
 	for _, k := range keys {
-		if s, ok := m[k].(string); ok && s != "" {
+		if s := toString(m[k]); s != "" {
 			pairs = append(pairs, k+"="+cut(s, 80))
 			if len(pairs) >= 6 {
 				break

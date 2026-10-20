@@ -106,6 +106,15 @@ func TestFormatFull(t *testing.T) {
 	if got := FormatFull(gear); !strings.Contains(got, "Big boom") || !strings.Contains(got, "Ship module") {
 		t.Fatalf("gear fallbacks must render, got %q", got)
 	}
+	// Non-string values coerce instead of vanishing (review r2).
+	numGear := bson.M{"name": "Mortar", "params": bson.M{"damage": 120, "active": true}}
+	if got := FormatFull(numGear); !strings.Contains(got, "damage=120") || !strings.Contains(got, "active=true") {
+		t.Fatalf("numeric params must coerce, got %q", got)
+	}
+	numAnatomy := bson.M{"name": "Hulk", "anatomy": bson.A{bson.M{"part": "Vent", "av": 0, "fatal": 1}}}
+	if got := FormatFull(numAnatomy); !strings.Contains(got, "AV:0") || !strings.Contains(got, "fatal:1") {
+		t.Fatalf("numeric anatomy must coerce, got %q", got)
+	}
 }
 
 func TestClampLimit(t *testing.T) {
