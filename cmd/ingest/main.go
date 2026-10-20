@@ -186,6 +186,12 @@ func run() error {
 				for _, e := range a {
 					raw = append(raw, e.Value)
 				}
+			case []bson.D:
+				for _, d := range a {
+					for _, e := range d {
+						raw = append(raw, e.Value)
+					}
+				}
 			}
 			var al []string
 			for _, e := range raw {

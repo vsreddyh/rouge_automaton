@@ -88,6 +88,13 @@ func strList(m bson.M, key string) []string {
 		for _, e := range v {
 			add(ToString(e.Value))
 		}
+	case []bson.D:
+		// An array of documents contributes every value.
+		for _, d := range v {
+			for _, e := range d {
+				add(ToString(e.Value))
+			}
+		}
 	case string:
 		add(v)
 	default:
@@ -180,7 +187,9 @@ func findAll(ctx context.Context, db *mongo.Database, coll string, filter bson.M
 		log.Printf("mcpdb: find %s: %v", coll, err)
 		return nil
 	}
-	defer cur.Close(ctx)
+	// Cleanup on a detached context: if the caller already cancelled, the
+	// cursor must still close instead of leaking server-side.
+	defer cur.Close(context.WithoutCancel(ctx))
 	var docs []bson.M
 	if err := cur.All(ctx, &docs); err != nil {
 		log.Printf("mcpdb: decode %s: %v", coll, err)
@@ -513,6 +522,11 @@ func anatomySummary(d bson.M) string {
 			rows[i] = e
 		}
 	case []map[string]any:
+		rows = make([]any, len(v))
+		for i, e := range v {
+			rows[i] = e
+		}
+	case []bson.D:
 		rows = make([]any, len(v))
 		for i, e := range v {
 			rows[i] = e

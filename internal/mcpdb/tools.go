@@ -234,8 +234,7 @@ func withEmptyHint(formatted string) string {
 }
 
 func strArg(args map[string]any, key string) string {
-	s, _ := args[key].(string)
-	return strings.TrimSpace(s)
+	return strings.TrimSpace(ToString(args[key]))
 }
 
 func intArg(args map[string]any, key string, def int) int {

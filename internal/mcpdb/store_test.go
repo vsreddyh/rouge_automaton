@@ -68,6 +68,10 @@ func TestFindExact(t *testing.T) {
 	if _, ok := FindExact([]bson.M{dDoc}, "hulk"); !ok {
 		t.Fatal("bson.D aliases must match")
 	}
+	arrDoc := bson.M{"name": "Hulk", "aliases": []bson.D{{{Key: "x", Value: "hulk"}}}}
+	if _, ok := FindExact([]bson.M{arrDoc}, "hulk"); !ok {
+		t.Fatal("[]bson.D aliases must match")
+	}
 	if _, ok := FindExact([]bson.M{bson.M{"name": "Mystery"}}, ""); ok {
 		t.Fatal("empty query must never match")
 	}
@@ -139,6 +143,10 @@ func TestFormatFull(t *testing.T) {
 	rawMapAnatomy := bson.M{"name": "Hulk", "anatomy": []map[string]any{{"part": "Vent"}}}
 	if got := FormatFull(rawMapAnatomy); !strings.Contains(got, "Vent") {
 		t.Fatalf("[]map[string]any anatomy must render, got %q", got)
+	}
+	rawDocAnatomy := bson.M{"name": "Hulk", "anatomy": []bson.D{{{Key: "part", Value: "Vent"}}}}
+	if got := FormatFull(rawDocAnatomy); !strings.Contains(got, "Vent") {
+		t.Fatalf("[]bson.D anatomy must render, got %q", got)
 	}
 	// Numeric provenance coerces instead of falling back to mongo.
 	numSrc := bson.M{"name": "X", "source": 123}
