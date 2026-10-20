@@ -69,13 +69,13 @@ func strList(m bson.M, key string) []string {
 	switch v := m[key].(type) {
 	case bson.A:
 		for _, e := range v {
-			if s := toString(e); s != "" {
+			if s := ToString(e); s != "" {
 				out = append(out, s)
 			}
 		}
 	case []any:
 		for _, e := range v {
-			if s := toString(e); s != "" {
+			if s := ToString(e); s != "" {
 				out = append(out, s)
 			}
 		}
@@ -145,12 +145,12 @@ func FilterUnits(docs []bson.M, faction, role string) []bson.M {
 	role = normalize(role)
 	var out []bson.M
 	for _, d := range docs {
-		if normalize(toString(d["faction"])) != faction {
+		if normalize(ToString(d["faction"])) != faction {
 			continue
 		}
 		if role != "" {
-			if !strings.Contains(strings.ToLower(toString(d["role"])), role) &&
-				!strings.Contains(strings.ToLower(toString(d["note"])), role) {
+			if !strings.Contains(strings.ToLower(ToString(d["role"])), role) &&
+				!strings.Contains(strings.ToLower(ToString(d["note"])), role) {
 				continue
 			}
 		}
@@ -366,11 +366,11 @@ func FormatContext(docs []bson.M) string {
 		src := docSource(d)
 		weak := strings.Join(strList(d, "weak_points"), " ")
 		if weak == "" {
-			weak = toString(d["effect_text"])
+			weak = ToString(d["effect_text"])
 		}
 		counters := strings.Join(strList(d, "counters"), " ")
 		if counters == "" {
-			counters = toString(d["procurement"])
+			counters = ToString(d["procurement"])
 		}
 		lines = append(lines, "- "+docName(d)+": weak "+weak+" | counter "+counters+" [source: "+src+"]")
 	}
@@ -383,32 +383,32 @@ func FormatContext(docs []bson.M) string {
 // params). Single line, rune-capped, so it fits the tool-output budget.
 func FormatFull(d bson.M) string {
 	src := docSource(d)
-	role := toString(d["role"])
+	role := ToString(d["role"])
 	if role == "" {
-		if desc := toString(d["description"]); desc != "" {
+		if desc := ToString(d["description"]); desc != "" {
 			role = desc
-		} else if note := toString(d["note"]); note != "" {
+		} else if note := ToString(d["note"]); note != "" {
 			role = note
-		} else if wt := toString(d["wiki_text"]); wt != "" {
+		} else if wt := ToString(d["wiki_text"]); wt != "" {
 			role = cut(wt, 200)
 		}
 	}
 	weak := strings.Join(strList(d, "weak_points"), "; ")
 	if weak == "" {
-		weak = toString(d["effect_text"])
+		weak = ToString(d["effect_text"])
 	}
 	counters := strings.Join(strList(d, "counters"), "; ")
 	if counters == "" {
-		counters = toString(d["procurement"])
+		counters = ToString(d["procurement"])
 	}
 	var extra []string
 	if h := healthOf(d); h != "" {
 		extra = append(extra, "health "+h)
 	}
-	if s := toString(d["size"]); s != "" {
+	if s := ToString(d["size"]); s != "" {
 		extra = append(extra, "size "+s)
 	}
-	if md := toString(d["min_difficulty"]); md != "" {
+	if md := ToString(d["min_difficulty"]); md != "" {
 		extra = append(extra, "difficulty "+md)
 	}
 	if a := anatomySummary(d); a != "" {
@@ -424,7 +424,7 @@ func FormatFull(d bson.M) string {
 		extra = append(extra, p)
 	}
 	line := "- " + docName(d)
-	if f := toString(d["faction"]); f != "" {
+	if f := ToString(d["faction"]); f != "" {
 		line += " [" + f + "]"
 	}
 	if role != "" {
@@ -442,11 +442,11 @@ func FormatFull(d bson.M) string {
 	return line + " [source: " + src + "]"
 }
 
-// toString coerces a doc value to single-line text: strings pass through,
-// numerics and bools render via fmt.Sprint, nil and other shapes read empty.
-// Keeps rich excerpts from silently dropping wiki-crawl numerics or forging
-// extra lines from embedded newlines.
-func toString(v any) string {
+// ToString coerces a doc value to single-line text: strings pass through,
+// numerics, bools and json.Number render via fmt.Sprint, nil and other
+// shapes read empty. Shared with ingest so seed coverage and query-time
+// matching coerce identically.
+func ToString(v any) string {
 	if s, ok := v.(string); ok {
 		return flat(s)
 	}
@@ -470,7 +470,7 @@ func healthOf(d bson.M) string {
 	if _, ok := d["health"].(bool); ok {
 		return ""
 	}
-	h := strings.TrimSpace(toString(d["health"]))
+	h := strings.TrimSpace(ToString(d["health"]))
 	if h == "" {
 		return ""
 	}
@@ -483,9 +483,9 @@ func healthOf(d bson.M) string {
 // anatomyRow reads one anatomy row stored as BSON or plain maps,
 // coercing non-string AV/fatal numerics instead of dropping them.
 func anatomyRow(m map[string]any) (part, av, fatal string) {
-	part = toString(m["part"])
-	av = toString(m["av"])
-	fatal = toString(m["fatal"])
+	part = ToString(m["part"])
+	av = ToString(m["av"])
+	fatal = ToString(m["fatal"])
 	return part, av, fatal
 }
 
@@ -566,7 +566,7 @@ func conditionsSummary(d bson.M) string {
 			parts = append(parts, k+" "+strings.Join(items, ", "))
 		}
 	}
-	if a := toString(d["archetype"]); a != "" {
+	if a := ToString(d["archetype"]); a != "" {
 		parts = append(parts, "archetype "+a)
 	}
 	return strings.Join(parts, "; ")
@@ -600,7 +600,7 @@ func paramsSummary(d bson.M) string {
 	sort.Strings(keys)
 	var pairs []string
 	for _, k := range keys {
-		if s := toString(m[k]); s != "" {
+		if s := ToString(m[k]); s != "" {
 			pairs = append(pairs, flat(k)+"="+cut(s, 80))
 			if len(pairs) >= 6 {
 				break

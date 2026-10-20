@@ -11,6 +11,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -25,6 +26,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo/readpref"
 
 	"rouge_automaton/internal/config"
+	"rouge_automaton/internal/mcpdb"
 )
 
 type unitSeed struct {
@@ -79,11 +81,16 @@ func ensureIndexes(ctx context.Context, db *mongo.Database) error {
 		Options: options.Index().SetUnique(true).SetName("name_ci").
 			SetCollation(ciCollation),
 	}
-	// dropLegacy removes the pre-collation index if present; absence (or
-	// any other drop error) is not fatal — the ci index above is the
-	// enforcement point either way.
+	// dropLegacy removes the pre-collation index if present. Absence
+	// (IndexNotFound, code 27) is the common clean-run case and stays
+	// silent; any other drop error is logged but not fatal — the ci index
+	// above is the enforcement point either way.
 	dropLegacy := func(coll, name string) {
-		if _, err := db.Collection(coll).Indexes().DropOne(ctx, name); err != nil {
+		if err := db.Collection(coll).Indexes().DropOne(ctx, name); err != nil {
+			var cmdErr mongo.CommandError
+			if errors.As(err, &cmdErr) && cmdErr.Code == 27 {
+				return
+			}
 			log.Printf("ingest: drop legacy index %s.%s: %v", coll, name, err)
 		}
 	}
@@ -150,52 +157,43 @@ func run() error {
 		}
 		known := map[string][]string{}
 		for _, d := range found {
-			if n, ok := d["name"].(string); ok {
-				// Alias fields come in every writer shape; coerce the same
-				// scalar set toString accepts so covered() never silently
-				// misses a differently-shaped doc.
-				var raw []any
-				switch a := d["aliases"].(type) {
-				case bson.A:
-					raw = []any(a)
-				case []any:
-					raw = a
-				case []string:
-					raw = make([]any, len(a))
-					for i, s := range a {
-						raw[i] = s
-					}
-				case json.Number:
-					raw = []any{string(a)}
-				case string:
-					// A lone string alias (same shape strList accepts).
-					raw = []any{a}
-				case bson.D:
-					for _, e := range a {
-						raw = append(raw, e.Value)
-					}
-				}
-				var al []string
-				for _, e := range raw {
-					var s string
-					switch t := e.(type) {
-					case string:
-						s = t
-					case bool,
-						int, int8, int16, int32, int64,
-						uint, uint8, uint16, uint32, uint64,
-						float32, float64,
-						json.Number:
-						s = fmt.Sprint(t)
-					default:
-						continue
-					}
-					if s = strings.TrimSpace(s); s != "" {
-						al = append(al, strings.ToLower(s))
-					}
-				}
-				known[strings.ToLower(strings.TrimSpace(n))] = al
+			// Names and aliases coerce through the same ToString gate the
+			// store renders and matches with, so a non-string field can
+			// never silently dodge coverage.
+			name := mcpdb.ToString(d["name"])
+			if name == "" {
+				continue
 			}
+			// Alias fields come in every writer shape (bson.A from
+			// mongo, []any/[]string from JSON decodes, lone strings,
+			// documents); ToString coerces every scalar shape.
+			var raw []any
+			switch a := d["aliases"].(type) {
+			case bson.A:
+				raw = []any(a)
+			case []any:
+				raw = a
+			case []string:
+				raw = make([]any, len(a))
+				for i, s := range a {
+					raw[i] = s
+				}
+			case json.Number:
+				raw = []any{string(a)}
+			case string:
+				raw = []any{a}
+			case bson.D:
+				for _, e := range a {
+					raw = append(raw, e.Value)
+				}
+			}
+			var al []string
+			for _, e := range raw {
+				if s := mcpdb.ToString(e); s != "" {
+					al = append(al, strings.ToLower(strings.TrimSpace(s)))
+				}
+			}
+			known[strings.ToLower(strings.TrimSpace(name))] = al
 		}
 		return known, nil
 	}
@@ -218,7 +216,7 @@ func run() error {
 			}
 		}
 		for n, al := range known {
-			if n == strings.ToLower(seed) {
+			if n == strings.ToLower(strings.TrimSpace(seed)) {
 				continue
 			}
 			if toks[n] {
@@ -248,7 +246,7 @@ func run() error {
 			faction = strings.ToLower(strings.TrimSuffix(filepath.Base(f), ".json"))
 		}
 		for _, u := range d.Units {
-			if covered(knownUnits, u.Name) {
+			if u.Name == "" || covered(knownUnits, u.Name) {
 				continue
 			}
 			seed := bson.M{

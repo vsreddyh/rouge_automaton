@@ -239,7 +239,7 @@ func strArg(args map[string]any, key string) string {
 }
 
 func intArg(args map[string]any, key string, def int) int {
-	// Coerce through the same toString gate the store uses, so every JSON
+	// Coerce through the same ToString gate the store uses, so every JSON
 	// number shape (and numeric strings) resolves; clampLimit makes the
 	// result safe and unparseable input falls back to the default.
 	s := strings.TrimSpace(toString(args[key]))
