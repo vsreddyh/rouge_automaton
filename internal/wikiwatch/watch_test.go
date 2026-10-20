@@ -6,7 +6,7 @@ import (
 
 	"go.mongodb.org/mongo-driver/v2/bson"
 
-	"github.com/vsreddyh/rouge_automaton/internal/wikifeed"
+	"rouge_automaton/internal/wikifeed"
 )
 
 func TestTrackedFrom(t *testing.T) {

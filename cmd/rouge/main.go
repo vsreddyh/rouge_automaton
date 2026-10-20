@@ -14,8 +14,8 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 	"go.mongodb.org/mongo-driver/v2/mongo/readpref"
 
-	"github.com/vsreddyh/rouge_automaton/internal/config"
-	godiscord "github.com/vsreddyh/rouge_automaton/internal/discord"
+	"rouge_automaton/internal/config"
+	godiscord "rouge_automaton/internal/discord"
 )
 
 func main() {

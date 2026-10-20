@@ -15,8 +15,8 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
-	"github.com/vsreddyh/rouge_automaton/internal/wikifeed"
-	"github.com/vsreddyh/rouge_automaton/internal/wikiparse"
+	"rouge_automaton/internal/wikifeed"
+	"rouge_automaton/internal/wikiparse"
 )
 
 // Tracked is a row of tracked_pages.

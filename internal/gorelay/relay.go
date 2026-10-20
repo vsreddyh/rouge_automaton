@@ -172,6 +172,9 @@ func (c *Client) doRound(ctx context.Context, url, session string, body []byte) 
 		} else if _, err := strconv.Atoi(ra); err == nil {
 			ra += "s"
 		}
+		// Drain (bounded) before returning so the connection stays reusable
+		// — this is the hottest path under throttle.
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4<<10))
 		return roundResult{reply: fmt.Sprintf(Busy, ra)}
 	}
 	// Decode items twice: typed for dispatch, raw for verbatim echo of
@@ -220,6 +223,63 @@ func (c *Client) doRound(ctx context.Context, url, session string, body []byte) 
 	}
 	// Well-formed but content-free response: Dead, not an empty Discord post.
 	return roundResult{reply: Dead}
+}
+
+// Probe checks model-backend reachability with a minimal 1-token request.
+// It returns "clear" (200), "busy" (429), or "dead" (anything else) so
+// /status can report uplink state without parsing a full answer.
+func (c *Client) Probe(ctx context.Context) string {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	url := strings.TrimSuffix(c.BaseURL, "/") + "/v1/responses"
+	body, _ := json.Marshal(map[string]any{
+		"model":             c.Model,
+		"input":             []Message{{Role: "user", Content: "ping"}},
+		"max_output_tokens": 1, "temperature": 0,
+		"reasoning": map[string]any{"effort": "low"},
+	})
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
+	if err != nil {
+		return "dead"
+	}
+	req.Header.Set("Authorization", "Bearer "+c.APIKey)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "rouge-automaton/1.0")
+	req.Header.Set("x-opencode-session", "rouge-status")
+	httpc := c.HTTP
+	if httpc == nil {
+		httpc = http.DefaultClient
+	}
+	resp, err := httpc.Do(req)
+	if err != nil {
+		if probeRateLimited(err.Error()) {
+			return "busy"
+		}
+		return "dead"
+	}
+	// Drain (bounded) before close so the connection stays reusable —
+	// same 1MB-cap reasoning as doRound, smaller budget for a probe.
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4<<10))
+	switch resp.StatusCode {
+	case 200:
+		return "clear"
+	case 429:
+		return "busy"
+	default:
+		return "dead"
+	}
+}
+
+// probeRateLimited classifies transport errors for Probe. It matches 429,
+// "too many requests", and "rate limit"/"ratelimit" — but never a bare
+// "rate", which overmatches ("separate", "desperate").
+func probeRateLimited(s string) bool {
+	low := strings.ToLower(s)
+	return strings.Contains(low, "429") ||
+		strings.Contains(low, "too many requests") ||
+		strings.Contains(low, "rate limit") ||
+		strings.Contains(low, "ratelimit")
 }
 
 // maxToolRounds caps the think-act loop so one Discord message can never
@@ -345,9 +405,10 @@ var numRe = regexp.MustCompile(`^[0-9]+$`)
 // kills both false positives ("retry 3 times" without throttling) and false
 // negatives (a bare 429 with no number, which gets the stand-by ETA).
 func busyOrDead(s string) string {
-	low := strings.ToLower(s)
-	if strings.Contains(low, "429") || strings.Contains(low, "rate") ||
-		strings.Contains(low, "too many requests") {
+	// probeRateLimited is the single tight matcher (429, rate limit,
+	// ratelimit, too many requests) — bare "rate" must never qualify
+	// ("separate", "desperate").
+	if probeRateLimited(strings.ToLower(s)) {
 		if m := retryRe.FindStringSubmatch(s); m != nil && numRe.MatchString(m[1]) {
 			return fmt.Sprintf(Busy, m[1]+"s")
 		}

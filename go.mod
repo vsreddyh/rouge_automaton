@@ -1,4 +1,4 @@
-module github.com/vsreddyh/rouge_automaton
+module rouge_automaton
 
 go 1.25.0
 

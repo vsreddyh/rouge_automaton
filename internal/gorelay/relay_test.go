@@ -254,3 +254,41 @@ func TestChatWithToolsNilExec(t *testing.T) {
 		t.Fatalf("nil exec must stop after one round, got %d", rounds)
 	}
 }
+
+func TestProbe(t *testing.T) {
+	cases := []struct {
+		name   string
+		status int
+		want   string
+	}{
+		{"ok", 200, "clear"},
+		{"throttled", 429, "busy"},
+		{"broke", 500, "dead"},
+	}
+	for _, c := range cases {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Header.Get("x-opencode-session") != "rouge-status" {
+				t.Error("probe must carry the rouge-status session")
+			}
+			w.WriteHeader(c.status)
+		}))
+		cl := &Client{BaseURL: srv.URL, APIKey: "k", Model: "m", HTTP: srv.Client()}
+		if got := cl.Probe(context.Background()); got != c.want {
+			t.Fatalf("%s: got %q want %q", c.name, got, c.want)
+		}
+		srv.Close()
+	}
+}
+
+func TestProbeRateLimited(t *testing.T) {
+	for _, s := range []string{"429 too many", "Rate limit hit", "ratelimited", "too many requests"} {
+		if !probeRateLimited(s) {
+			t.Fatalf("must read busy: %q", s)
+		}
+	}
+	for _, s := range []string{"separate failure", "desperate times", "connection reset"} {
+		if probeRateLimited(s) {
+			t.Fatalf("must not read busy: %q", s)
+		}
+	}
+}

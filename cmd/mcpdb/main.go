@@ -22,8 +22,8 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 	"go.mongodb.org/mongo-driver/v2/mongo/readpref"
 
-	"github.com/vsreddyh/rouge_automaton/internal/config"
-	"github.com/vsreddyh/rouge_automaton/internal/mcpdb"
+	"rouge_automaton/internal/config"
+	"rouge_automaton/internal/mcpdb"
 )
 
 func main() {
