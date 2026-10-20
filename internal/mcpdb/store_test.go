@@ -63,6 +63,11 @@ func TestFindExact(t *testing.T) {
 	if _, ok := FindExact([]bson.M{bare}, "mystery"); !ok {
 		t.Fatal("alias-only doc must match on its alias")
 	}
+	// Document-shaped and scalar aliases coerce like ingest's loadKnown.
+	dDoc := bson.M{"name": "Hulk", "aliases": bson.D{{Key: "x", Value: "hulk"}}}
+	if _, ok := FindExact([]bson.M{dDoc}, "hulk"); !ok {
+		t.Fatal("bson.D aliases must match")
+	}
 	if _, ok := FindExact([]bson.M{bson.M{"name": "Mystery"}}, ""); ok {
 		t.Fatal("empty query must never match")
 	}
@@ -134,6 +139,11 @@ func TestFormatFull(t *testing.T) {
 	rawMapAnatomy := bson.M{"name": "Hulk", "anatomy": []map[string]any{{"part": "Vent"}}}
 	if got := FormatFull(rawMapAnatomy); !strings.Contains(got, "Vent") {
 		t.Fatalf("[]map[string]any anatomy must render, got %q", got)
+	}
+	// Numeric provenance coerces instead of falling back to mongo.
+	numSrc := bson.M{"name": "X", "source": 123}
+	if got := FormatFull(numSrc); !strings.Contains(got, "[source: 123]") {
+		t.Fatalf("numeric source must render, got %q", got)
 	}
 	// Newline keys flatten too — a wiki infobox key must never forge a
 	// second cited line (review r4).

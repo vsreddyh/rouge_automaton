@@ -83,8 +83,17 @@ func strList(m bson.M, key string) []string {
 		for _, s := range v {
 			add(s)
 		}
+	case bson.D:
+		// A document-shaped field contributes its values.
+		for _, e := range v {
+			add(ToString(e.Value))
+		}
 	case string:
 		add(v)
+	default:
+		// Any other scalar (numeric, bool, json.Number) coerces exactly
+		// like ingest's loadKnown, so seed-time and query-time agree.
+		add(ToString(m[key]))
 	}
 	return out
 }
@@ -345,11 +354,11 @@ func cut(s string, n int) string {
 // docSource renders a doc's provenance for citations: source_url wins, then
 // source, then the mongo fallback so every line stays citable.
 func docSource(d bson.M) string {
-	if src, _ := d["source_url"].(string); src != "" {
-		return flat(src)
+	if src := ToString(d["source_url"]); src != "" {
+		return src
 	}
-	if s, ok := d["source"].(string); ok && s != "" {
-		return flat(s)
+	if s := ToString(d["source"]); s != "" {
+		return s
 	}
 	return "mongo"
 }

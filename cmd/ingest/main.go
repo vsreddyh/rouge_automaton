@@ -246,7 +246,7 @@ func run() error {
 			faction = strings.ToLower(strings.TrimSuffix(filepath.Base(f), ".json"))
 		}
 		for _, u := range d.Units {
-			if u.Name == "" || covered(knownUnits, u.Name) {
+			if strings.TrimSpace(u.Name) == "" || covered(knownUnits, u.Name) {
 				continue
 			}
 			seed := bson.M{
@@ -269,7 +269,7 @@ func run() error {
 				SetUpsert(true))
 		}
 		for _, s := range d.Structures {
-			if s.Name == "" || covered(knownStructures, s.Name) {
+			if strings.TrimSpace(s.Name) == "" || covered(knownStructures, s.Name) {
 				continue
 			}
 			seed := bson.M{
