@@ -75,7 +75,7 @@ podman run --rm --network=host -e MONGO_URI=mongodb://127.0.0.1:27017/rouge \
    overlap + name/alias bonus; every answer cites its source.
 3. Miss → the model falls back to `wiki_search` (`helldivers.wiki.gg`),
    summarized with links. Unknowns are reported as unconfirmed, not invented.
-4. Rate limit (`429`) → exact reply: `The Lost Son is busy spreading democracy on Cyberstan. Hold position, Helldiver — try again shortly. Estimated time of liberation: {n}s.` Other backend failures → `Uplink dead. No fallback. For Super Earth, try later.`
+4. Rate limit (`429`) → exact reply: `The Lost Son is busy spreading democracy on Cyberstan. Hold position, Helldiver — try again shortly. Estimated time of liberation: {n}s.` Other backend failures → `Uplink dead. No fallback. For Super Earth, try later.` Tool-loop exhaustion (model kept searching past maxToolRounds with no answer) → `Couldn't pin it down — intel thin or scattered. Unconfirmed. Narrow the target and try again.` (never Uplink dead; the uplink is healthy, the intel is thin).
 
 Doctrine reminders: flank Hulk/Tank rear vents, Flare Trooper first, objectives (fabricators / bug holes / warp ships) before heavies.
 
