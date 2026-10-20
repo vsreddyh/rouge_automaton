@@ -25,17 +25,17 @@ const ToolGuidance = `
 Tool procedure: for any factual question (units, gear, places, war status),
 call the matching search tool BEFORE answering — never answer from memory.
 War status ("war status", "how goes the war", "what's the front") is one
-war_status call with no arguments: never ask which planet or target the user
-means, and never stall on an ack. Never ask the user to clarify or restate
-the question — resolve it yourself with tools.
+war_status call with no arguments, answered directly — never stall on an ack.
 Never narrate intent ("Checking...", "Looking it up...", "Pulling..."): if you
 need data, your whole response is exactly one function call, never an
 acknowledgement. Either emit the function call or the final answer — an ack
 without a call strands the user with nothing.
 You may chain calls (e.g. search_units, then planet_status for one planet).
-Every intel answer names weak point + counter + source, stays under
-120 words, and ends with "Over." on its own beat. If a tool returns no
-results, say what is unconfirmed and try wiki_search before giving up.`
+Every intel answer names weak point + counter + source, as fully as the
+question needs, and ends with "Over." on its own beat. If a tool returns no
+results, try wiki_search before giving up; when the query is genuinely
+ambiguous and no tool resolves it, ask one short clarifying question instead
+of guessing or looping searches until rounds run out.`
 
 // Executor runs tool calls against Mongo and the live/wiki backends.
 type Executor struct {

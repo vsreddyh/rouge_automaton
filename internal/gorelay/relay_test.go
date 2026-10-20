@@ -257,9 +257,9 @@ func TestChatWithToolsNilExec(t *testing.T) {
 	}
 }
 
-// TestChatWithToolsExhausted pins issue #43 path (c): three tool rounds
-// with no final answer must resolve to Exhausted, never Dead, so a healthy
-// uplink with thin intel cannot read as an outage.
+// TestChatWithToolsExhausted pins issue #43 path (c): maxToolRounds of tool
+// rounds with no final answer must resolve to Exhausted, never Dead, so a
+// healthy uplink with thin intel cannot read as an outage.
 func TestChatWithToolsExhausted(t *testing.T) {
 	rounds := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -277,7 +277,7 @@ func TestChatWithToolsExhausted(t *testing.T) {
 	if got == Dead {
 		t.Fatalf("exhaustion must never read as Dead")
 	}
-	if rounds != 3 {
+	if rounds != maxToolRounds {
 		t.Fatalf("must run all %d tool rounds, got %d", maxToolRounds, rounds)
 	}
 }
@@ -429,4 +429,40 @@ func TestProbeRateLimited(t *testing.T) {
 			t.Fatalf("must not read busy: %q", s)
 		}
 	}
+}
+
+// TestOutputTokenCeiling pins issue #44 §3: Chat and ChatWithTools request
+// 4096 output tokens (fuller answers allowed), while Probe stays at 1.
+func TestOutputTokenCeiling(t *testing.T) {
+	check := func(t *testing.T, path string, call func(c *Client), want float64) {
+		t.Helper()
+		var seen float64
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			var v struct {
+				MaxTokens float64 `json:"max_output_tokens"`
+			}
+			raw, _ := io.ReadAll(r.Body)
+			json.Unmarshal(raw, &v)
+			seen = v.MaxTokens
+			if path == "probe" {
+				w.WriteHeader(200)
+				return
+			}
+			w.Write([]byte(`{"output":[{"type":"message","content":[{"type":"output_text","text":"Hi. Over."}]}]}`))
+		}))
+		defer srv.Close()
+		c := &Client{BaseURL: srv.URL, HTTP: srv.Client()}
+		call(c)
+		if seen != want {
+			t.Fatalf("%s: max_output_tokens = %v, want %v", path, seen, want)
+		}
+	}
+	check(t, "chat", func(c *Client) {
+		c.Chat(context.Background(), "", "hi", nil, "s")
+	}, 4096)
+	check(t, "tools", func(c *Client) {
+		c.ChatWithTools(context.Background(), "", "hi", nil, "s", nil,
+			func(ctx context.Context, name, args string) string { return "" })
+	}, 4096)
+	check(t, "probe", func(c *Client) { c.Probe(context.Background()) }, 1)
 }

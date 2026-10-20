@@ -88,7 +88,7 @@ type Client struct {
 // non-empty turns (empty content would waste budget and confuse the relay),
 // the query is always appended last, and session should be stable per
 // conversation (thread ID) so the relay can route and cache by session.
-// The request pins low reasoning effort with a 1024-token ceiling: the
+// The request pins low reasoning effort with a 4096-token ceiling: the
 // relay otherwise spends the whole budget thinking and returns nothing.
 func (c *Client) Chat(ctx context.Context, system, query string, history []Message, session string) string {
 	// Sliding window over non-empty turns: drop blanks, keep the tail.
@@ -113,7 +113,7 @@ func (c *Client) Chat(ctx context.Context, system, query string, history []Messa
 	// no channels or funcs), so the error is dropped by construction.
 	body, _ := json.Marshal(map[string]any{
 		"model": c.Model, "instructions": system, "input": input,
-		"max_output_tokens": 1024, "temperature": 0.6,
+		"max_output_tokens": 4096, "temperature": 0.6,
 		"reasoning": map[string]any{"effort": "low"},
 	})
 	text := c.doRound(ctx, url, session, body)
@@ -151,7 +151,7 @@ type roundResult struct {
 // co-present text attached as context, so a narration-plus-call round never
 // drops the call. The API envelope decides, nothing else.
 func (c *Client) doRound(ctx context.Context, url, session string, body []byte) roundResult {
-	// 60s wall clock per the terse reply budget; the caller adds its own.
+	// 60s wall clock per round; the caller adds its own overall deadline.
 	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
@@ -328,8 +328,10 @@ func probeRateLimited(s string) bool {
 }
 
 // maxToolRounds caps the think-act loop so one Discord message can never
-// turn into an unbounded relay session.
-const maxToolRounds = 3
+// turn into an unbounded relay session. Ten rounds cover loadout-style
+// questions spanning 4 gear collections plus wiki fallback; exhaustion
+// still resolves to Exhausted, just fires far less often.
+const maxToolRounds = 10
 
 // ChatWithTools runs the think-act loop: the model may call the offered
 // tools (each executed by exec, which returns plain-text results) before
@@ -373,7 +375,7 @@ func (c *Client) ChatWithTools(ctx context.Context, system, query string, histor
 		body, _ := json.Marshal(map[string]any{
 			"model": c.Model, "instructions": system, "input": input,
 			"tools":             specs,
-			"max_output_tokens": 1024, "temperature": 0.6,
+			"max_output_tokens": 4096, "temperature": 0.6,
 			"reasoning": map[string]any{"effort": "low"},
 		})
 		res := c.doRound(ctx, url, session, body)
