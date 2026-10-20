@@ -190,6 +190,9 @@ func (e *Executor) Execute(ctx context.Context, name, argsJSON string) string {
 		}
 		return "no local intel for that name — check the spelling or try wiki_search"
 	case "planet_status":
+		if strArg(args, "name") == "" {
+			return "planet_status needs a name"
+		}
 		if e.Live == nil {
 			return "live war API not wired — report the uplink as down, never guess"
 		}
