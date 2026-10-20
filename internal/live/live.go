@@ -64,7 +64,7 @@ func (c *Client) planets(ctx context.Context) []map[string]any {
 	}
 	if fresh := c.refresh(ctx); fresh != nil {
 		c.mu.Lock()
-		c.plans, c.at = fresh, time.Now()
+		c.plans, c.at, c.retry = fresh, time.Now(), time.Time{}
 		c.mu.Unlock()
 		return fresh
 	}
@@ -310,6 +310,9 @@ func num(m map[string]any, key string) float64 {
 		}
 	case string:
 		if f, err := strconv.ParseFloat(strings.TrimSpace(v), 64); err == nil {
+			if math.IsNaN(f) || math.IsInf(f, 0) {
+				return 0
+			}
 			return f
 		}
 	}
