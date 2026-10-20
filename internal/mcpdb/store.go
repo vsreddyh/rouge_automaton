@@ -92,8 +92,8 @@ func strList(m bson.M, key string) []string {
 // docName returns a doc's display name, falling back to "?" so a malformed
 // doc still renders a citable line instead of an empty bullet.
 func docName(m bson.M) string {
-	if s, ok := m["name"].(string); ok && s != "" {
-		return flat(s)
+	if s := ToString(m["name"]); s != "" {
+		return s
 	}
 	return "?"
 }
