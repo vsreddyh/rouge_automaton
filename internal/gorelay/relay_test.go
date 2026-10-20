@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -436,25 +438,30 @@ func TestProbeRateLimited(t *testing.T) {
 func TestOutputTokenCeiling(t *testing.T) {
 	check := func(t *testing.T, path string, call func(c *Client), want float64) {
 		t.Helper()
-		var seen float64
+		var seen atomic.Uint64 // math.Float64bits, race-safe across handler/test goroutines
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			var v struct {
 				MaxTokens float64 `json:"max_output_tokens"`
 			}
-			raw, _ := io.ReadAll(r.Body)
-			json.Unmarshal(raw, &v)
-			seen = v.MaxTokens
+			raw, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Errorf("%s: reading request body: %v", path, err)
+			}
+			if err := json.Unmarshal(raw, &v); err != nil {
+				t.Errorf("%s: decoding request body: %v", path, err)
+			}
+			seen.Store(math.Float64bits(v.MaxTokens))
 			if path == "probe" {
 				w.WriteHeader(200)
 				return
 			}
-			w.Write([]byte(`{"output":[{"type":"message","content":[{"type":"output_text","text":"Hi. Over."}]}]}`))
+			_, _ = w.Write([]byte(`{"output":[{"type":"message","content":[{"type":"output_text","text":"Hi. Over."}]}]}`))
 		}))
 		defer srv.Close()
 		c := &Client{BaseURL: srv.URL, HTTP: srv.Client()}
 		call(c)
-		if seen != want {
-			t.Fatalf("%s: max_output_tokens = %v, want %v", path, seen, want)
+		if got := math.Float64frombits(seen.Load()); got != want {
+			t.Fatalf("%s: max_output_tokens = %v, want %v", path, got, want)
 		}
 	}
 	check(t, "chat", func(c *Client) {

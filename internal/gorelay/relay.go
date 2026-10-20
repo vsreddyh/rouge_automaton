@@ -90,6 +90,11 @@ type Client struct {
 // conversation (thread ID) so the relay can route and cache by session.
 // The request pins low reasoning effort with a 4096-token ceiling: the
 // relay otherwise spends the whole budget thinking and returns nothing.
+// 4096 deliberately exceeds the 2000-rune Discord cut — the ceiling covers
+// reasoning + answer together, and longer tool-loop turns chain several
+// calls per round. The visible reply is still cut to 2000 runes before
+// Postprocess lands the sign-off, so the extra headroom buys completion,
+// not channel spam.
 func (c *Client) Chat(ctx context.Context, system, query string, history []Message, session string) string {
 	// Sliding window over non-empty turns: drop blanks, keep the tail.
 	var input []Message
