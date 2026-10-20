@@ -104,6 +104,36 @@ func TestWarStatusNoData(t *testing.T) {
 	}
 }
 
+// TestEndTimeMillis pins parseEndTime against fractional-second timestamps:
+// the API may emit millis, and the date must not silently drop.
+func TestEndTimeMillis(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`[{"name":"FURY","currentOwner":"Humans","health":2000000,"maxHealth":2000000,` +
+			`"players":10,"event":{"eventType":1,"faction":"Automaton",` +
+			`"health":1336106,"maxHealth":1500000,"endTime":"2026-09-20T13:00:56.123Z"}}]`))
+	}))
+	defer srv.Close()
+	c := &Client{Base: srv.URL, Contact: "t", Client: "t", HTTP: srv.Client()}
+	if got := c.PlanetLine(context.Background(), "fury"); !strings.Contains(got, "ends Sep 20") {
+		t.Fatalf("millis endTime must keep the date: %q", got)
+	}
+	if got := c.WarStatus(context.Background()); !strings.Contains(got, "ends Sep 20") {
+		t.Fatalf("millis endTime must keep the date in war status: %q", got)
+	}
+}
+
+// TestNumIntShapes pins num() against non-float64 JSON shapes: an int
+// eventType must still classify DEFENSE, and int health must count.
+func TestNumIntShapes(t *testing.T) {
+	m := map[string]any{"eventType": 1, "health": 380000, "maxHealth": 1000000}
+	if num(m, "eventType") != 1 {
+		t.Fatalf("int eventType must read 1, got %v", num(m, "eventType"))
+	}
+	if num(m, "health") != 380000 {
+		t.Fatalf("int health must read 380000, got %v", num(m, "health"))
+	}
+}
+
 func TestCacheSurvivesOutage(t *testing.T) {
 	calls := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

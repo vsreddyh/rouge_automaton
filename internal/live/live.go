@@ -75,10 +75,36 @@ func (c *Client) planets(ctx context.Context) []map[string]any {
 }
 
 func num(m map[string]any, key string) float64 {
-	if v, ok := m[key].(float64); ok {
+	// encoding/json decodes numbers into float64, but a type switch keeps
+	// DEFENSE classification and counts correct if the API ever emits an
+	// int shape (or tests construct one): without it eventType == 1 reads
+	// 0 and every defense misclassifies as campaign.
+	switch v := m[key].(type) {
+	case float64:
 		return v
+	case float32:
+		return float64(v)
+	case int:
+		return float64(v)
+	case int64:
+		return float64(v)
+	case json.Number:
+		if f, err := v.Float64(); err == nil {
+			return f
+		}
 	}
 	return 0
+}
+
+// parseEndTime parses the war API's endTime, which may carry fractional
+// seconds: RFC3339Nano first, plain RFC3339 as fallback, so the date never
+// silently drops on a millis timestamp.
+func parseEndTime(s string) (time.Time, bool) {
+	if t, err := time.Parse(time.RFC3339Nano, s); err == nil {
+		return t, true
+	}
+	t, err := time.Parse(time.RFC3339, s)
+	return t, err == nil
 }
 
 func str(m map[string]any, key string) string {
@@ -113,7 +139,7 @@ func (c *Client) PlanetLine(ctx context.Context, name string) string {
 				}
 				end := ""
 				if es, _ := ev["endTime"].(string); es != "" {
-					if t, err := time.Parse(time.RFC3339, es); err == nil {
+					if t, ok := parseEndTime(es); ok {
 						end = ", ends " + t.Format("Jan 2")
 					}
 				}
@@ -181,7 +207,7 @@ func (c *Client) WarStatus(ctx context.Context) string {
 			f.kind = "DEFENSE"
 		}
 		if es, _ := ev["endTime"].(string); es != "" {
-			if t, err := time.Parse(time.RFC3339, es); err == nil {
+			if t, ok := parseEndTime(es); ok {
 				f.end = t.Format("Jan 2")
 			}
 		}
