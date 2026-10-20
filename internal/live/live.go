@@ -26,14 +26,17 @@ type Client struct {
 	Client  string
 	HTTP    *http.Client
 
-	mu    sync.RWMutex
-	at    time.Time
+	mu sync.RWMutex
+	at time.Time
+	// retry is the earliest a failed refresh may be retried: without it
+	// every call during an outage refires all four endpoints.
+	retry time.Time
 	plans []map[string]any
 }
 
 // New builds a Client from the bot config.
 func New(cfg config.Config) *Client {
-	return &Client{Base: cfg.HD2APIBase, Contact: cfg.XSuperContact, Client: cfg.XSuperClient}
+	return &Client{Base: strings.TrimSuffix(cfg.HD2APIBase, "/"), Contact: cfg.XSuperContact, Client: cfg.XSuperClient}
 }
 func (c *Client) http() *http.Client {
 	if c.HTTP != nil {
@@ -45,11 +48,18 @@ func (c *Client) http() *http.Client {
 // sharedHTTP is the process-wide client (keep-alive, single timeout).
 var sharedHTTP = &http.Client{Timeout: 20 * time.Second}
 
+// planets returns the cached roster, refreshing it past the 5-minute TTL.
+// The slice is shared and read-only: callers must not mutate it. A failed
+// refresh serves the cache (or nothing) and backs off 30 seconds so an
+// outage does not refire all four endpoints on every call.
 func (c *Client) planets(ctx context.Context) []map[string]any {
 	c.mu.RLock()
-	cached, at := c.plans, c.at
+	cached, at, retry := c.plans, c.at, c.retry
 	c.mu.RUnlock()
 	if time.Since(at) < 5*time.Minute && cached != nil {
+		return cached
+	}
+	if time.Now().Before(retry) {
 		return cached
 	}
 	if fresh := c.refresh(ctx); fresh != nil {
@@ -58,6 +68,9 @@ func (c *Client) planets(ctx context.Context) []map[string]any {
 		c.mu.Unlock()
 		return fresh
 	}
+	c.mu.Lock()
+	c.retry = time.Now().Add(30 * time.Second)
+	c.mu.Unlock()
 	return cached
 }
 
