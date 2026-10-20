@@ -172,14 +172,18 @@ func nameTable(raw any) map[string]string {
 		}
 	case []any:
 		for i, v := range t {
+			key := strconv.Itoa(i)
 			switch n := v.(type) {
 			case map[string]any:
+				if f := num(n, "index"); f != 0 {
+					key = strconv.Itoa(int(f))
+				}
 				if s := str(n, "name"); s != "" {
-					out[strconv.Itoa(i)] = s
+					out[key] = s
 				}
 			case string:
 				if strings.TrimSpace(n) != "" {
-					out[strconv.Itoa(i)] = n
+					out[key] = n
 				}
 			}
 		}
@@ -229,6 +233,9 @@ func joinRoster(campaign []map[string]any, status, info map[string]any, names ma
 	}
 	campByIndex := map[int]map[string]any{}
 	for _, e := range campaign {
+		if _, ok := e["planetIndex"]; !ok {
+			continue
+		}
 		campByIndex[int(num(e, "planetIndex"))] = e
 	}
 	statusList, _ := status["planetStatus"].([]any)
