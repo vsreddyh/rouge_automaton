@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -74,10 +75,41 @@ func (c *Client) planets(ctx context.Context) []map[string]any {
 }
 
 func num(m map[string]any, key string) float64 {
-	if v, ok := m[key].(float64); ok {
+	// encoding/json decodes numbers into float64, but a type switch keeps
+	// DEFENSE classification and counts correct if the API ever emits an
+	// int shape (or tests construct one): without it eventType == 1 reads
+	// 0 and every defense misclassifies as campaign.
+	switch v := m[key].(type) {
+	case float64:
 		return v
+	case float32:
+		return float64(v)
+	case int:
+		return float64(v)
+	case int64:
+		return float64(v)
+	case json.Number:
+		if f, err := v.Float64(); err == nil {
+			return f
+		}
 	}
 	return 0
+}
+
+// parseEndTime parses the war API's endTime, which may carry fractional
+// seconds: RFC3339Nano first, plain RFC3339 as fallback, so the date never
+// silently drops on a millis timestamp.
+func parseEndTime(s string) (time.Time, bool) {
+	if t, err := time.Parse(time.RFC3339Nano, s); err == nil {
+		return t, true
+	}
+	t, err := time.Parse(time.RFC3339, s)
+	return t, err == nil
+}
+
+func str(m map[string]any, key string) string {
+	s, _ := m[key].(string)
+	return s
 }
 
 // PlanetLine returns "Name: owner pct% — N divers." for an exact name,
@@ -107,7 +139,7 @@ func (c *Client) PlanetLine(ctx context.Context, name string) string {
 				}
 				end := ""
 				if es, _ := ev["endTime"].(string); es != "" {
-					if t, err := time.Parse(time.RFC3339, es); err == nil {
+					if t, ok := parseEndTime(es); ok {
 						end = ", ends " + t.Format("Jan 2")
 					}
 				}
@@ -118,4 +150,123 @@ func (c *Client) PlanetLine(ctx context.Context, name string) string {
 		return line + " Over."
 	}
 	return ""
+}
+
+// factionLabel normalizes an API faction name to the plural display form so
+// tallies read the same whatever casing the API returns ("Automaton" vs
+// "automatons"). Unknown factions pass through untouched.
+func factionLabel(s string) string {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "automaton", "automatons":
+		return "Automatons"
+	case "terminid", "terminids":
+		return "Terminids"
+	case "illuminate", "illuminates":
+		return "Illuminate"
+	}
+	return strings.TrimSpace(s)
+}
+
+// warFront is one active event, flattened for sorting and one-line display.
+type warFront struct {
+	name, label, kind, end string
+	pct, players           float64
+}
+
+// WarStatus summarizes the live war for a generic "war status" question that
+// names no planet: active fronts per faction plus the three busiest battles.
+// This is the tool that keeps the model from asking the user for a target.
+// Empty return means the API gave us nothing at all (outage, no cache), so
+// the caller can report a dead uplink instead of inventing a quiet galaxy.
+func (c *Client) WarStatus(ctx context.Context) string {
+	planets := c.planets(ctx)
+	if len(planets) == 0 {
+		return ""
+	}
+	var fronts []warFront
+	counts := map[string]int{}
+	divers := 0.0
+	for _, p := range planets {
+		divers += num(p, "players")
+		ev, ok := p["event"].(map[string]any)
+		if !ok || ev == nil {
+			continue
+		}
+		faction, _ := ev["faction"].(string)
+		emax, ehealth := num(ev, "maxHealth"), num(ev, "health")
+		if faction == "" || emax <= 0 {
+			continue
+		}
+		name := str(p, "name")
+		if strings.TrimSpace(name) == "" {
+			// Nameless payload entries carry no addressable front.
+			continue
+		}
+		label := factionLabel(faction)
+		counts[label]++
+		f := warFront{
+			name: name, label: label, kind: "campaign",
+			pct: 100 * (1 - ehealth/emax), players: num(p, "players"),
+		}
+		if num(ev, "eventType") == 1 {
+			f.kind = "DEFENSE"
+		}
+		if es, _ := ev["endTime"].(string); es != "" {
+			if t, ok := parseEndTime(es); ok {
+				f.end = t.Format("Jan 2")
+			}
+		}
+		fronts = append(fronts, f)
+	}
+	if len(fronts) == 0 {
+		return fmt.Sprintf("War status: no active fronts. %.0f divers deployed. Over.", divers)
+	}
+	// Busiest first; name breaks ties so repeats of one payload print the
+	// same line instead of shuffling between calls.
+	sort.SliceStable(fronts, func(i, j int) bool {
+		if fronts[i].players != fronts[j].players {
+			return fronts[i].players > fronts[j].players
+		}
+		return fronts[i].name < fronts[j].name
+	})
+	// Always tally all three known factions (zero included) so the answer
+	// says which front is quiet, then any unexpected faction alphabetically.
+	labels := []string{"Automatons", "Terminids", "Illuminate"}
+	var extras []string
+	for label := range counts {
+		switch label {
+		case "Automatons", "Terminids", "Illuminate":
+		default:
+			extras = append(extras, label)
+		}
+	}
+	sort.Strings(extras)
+	labels = append(labels, extras...)
+	tally := make([]string, 0, len(labels))
+	for _, label := range labels {
+		tally = append(tally, fmt.Sprintf("%s %d", label, counts[label]))
+	}
+	parts := make([]string, 0, 3)
+	for i, f := range fronts {
+		if i == 3 {
+			break
+		}
+		part := fmt.Sprintf("%s %s vs %s, %.1f%% ", f.name, strings.ToLower(f.kind), f.label, f.pct)
+		if f.kind == "DEFENSE" {
+			part += "repelled"
+		} else {
+			part += "liberated"
+		}
+		if f.end != "" {
+			part += ", ends " + f.end
+		}
+		part += fmt.Sprintf(", %.0f divers", f.players)
+		parts = append(parts, part)
+	}
+	noun := "fronts"
+	if len(fronts) == 1 {
+		noun = "front"
+	}
+	return fmt.Sprintf("War status: %d active %s — %s. Hottest: %s. %.0f divers deployed. Over.",
+		len(fronts), noun, strings.Join(tally, ", "), strings.Join(parts, "; "), divers)
 }

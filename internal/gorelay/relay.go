@@ -125,18 +125,21 @@ func decodeResponse(resp *http.Response, v any) error {
 }
 
 // roundResult is one decoded Responses-API round: either a canned reply
-// (ok=false) or actionable output items (ok=true).
+// (ok=false) or actionable output items (ok=true). text carries narration
+// co-present with tool calls — context for the next round, never an answer.
 type roundResult struct {
 	reply string
 	ok    bool
 	items []outputItem
+	text  string
 }
 
 // doRound POSTs one request body and decodes the response. Transport,
-// status and envelope failures resolve to Busy/Dead with ok=false; a
-// decodable response with message text resolves to it with ok=false; a
-// response carrying only non-message items (e.g. function calls) resolves
-// with ok=true so the caller can act on them.
+// status and envelope failures resolve to Busy/Dead with ok=false. Final
+// means no tool calls: message text with no function call behind it resolves
+// to it with ok=false. Calls present means not final — ok=true, with any
+// co-present text attached as context, so a narration-plus-call round never
+// drops the call. The API envelope decides, nothing else.
 func (c *Client) doRound(ctx context.Context, url, session string, body []byte) roundResult {
 	// 60s wall clock per the terse reply budget; the caller adds its own.
 	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
@@ -202,6 +205,35 @@ func (c *Client) doRound(ctx context.Context, url, session string, body []byte) 
 		}
 		item.Raw = r
 		items = append(items, item)
+	}
+	// Calls present means not final: they execute and the loop continues,
+	// with co-present narration riding into history as context.
+	var calls []outputItem
+	for _, item := range items {
+		if item.Type == "function_call" {
+			calls = append(calls, item)
+		}
+	}
+	if len(calls) > 0 {
+		text := ""
+		for _, item := range items {
+			if item.Type != "message" {
+				continue
+			}
+			for _, part := range item.Content {
+				if part.Type == "output_text" && part.Text != "" {
+					text = part.Text
+					break
+				}
+			}
+			if text != "" {
+				break
+			}
+		}
+		if text == "" {
+			text = raw.OutputText
+		}
+		return roundResult{ok: true, items: items, text: text}
 	}
 	// Extraction order matters: the structured output[] array wins over the
 	// top-level output_text convenience field when both are present.
@@ -286,31 +318,12 @@ func probeRateLimited(s string) bool {
 // turn into an unbounded relay session.
 const maxToolRounds = 3
 
-// ackNudge is the one-shot follow-up when the model narrates a lookup
-// ("Checking Fury's war status. Over.") instead of emitting the function
-// call: first text would otherwise end the loop and strand the user with
-// an ack and no intel. Costs one extra round, and only on offending turns.
-const ackNudge = "You said you would check — now emit the function_call. No prose, no ack."
-
-// lookupAckRe spots narrated intent: a lookup verb with a lookup object.
-// Verb-only is not enough ("checking in, diver" is a greeting); the object
-// noun keeps greetings and finished answers out of the nudge path.
-var lookupAckRe = regexp.MustCompile(`(?i)\b(checking|looking up|looking into|searching|fetching|pulling up|verifying|confirming)\b.{0,80}?\b(status|intel|records|database|wiki|archives|front|lines|data|info|entry|manifest)\b`)
-
-// isLookupAck reports whether s narrates a lookup instead of answering.
-// Canned backend replies are never acks, even if they share a word.
-func isLookupAck(s string) bool {
-	if strings.HasPrefix(s, Dead) || strings.Contains(s, "Hold position, Helldiver") {
-		return false
-	}
-	return lookupAckRe.MatchString(s)
-}
-
 // ChatWithTools runs the think-act loop: the model may call the offered
 // tools (each executed by exec, which returns plain-text results) before
-// answering. The first message text ends the loop. Tool results that are
-// errors stay inside the loop as tool outputs; relay failures resolve to
-// the same canned replies as Chat.
+// answering. Message text with no tool call behind it ends the loop; text
+// beside calls rides into history as context while the calls execute. Tool
+// results that are errors stay inside the loop as tool outputs; relay
+// failures resolve to the same canned replies as Chat.
 func (c *Client) ChatWithTools(ctx context.Context, system, query string, history []Message, session string, tools []ToolDef, exec func(ctx context.Context, name, args string) string) string {
 	// Same sliding window as Chat, but as []any so raw function_call items
 	// and outputs can be appended verbatim in later rounds.
@@ -337,7 +350,6 @@ func (c *Client) ChatWithTools(ctx context.Context, system, query string, histor
 			"description": t.Description, "parameters": t.Parameters,
 		})
 	}
-	nudged := false
 	for round := 0; round < maxToolRounds; round++ {
 		// Same infallible-shape guarantee as Chat: no error to handle.
 		body, _ := json.Marshal(map[string]any{
@@ -348,16 +360,12 @@ func (c *Client) ChatWithTools(ctx context.Context, system, query string, histor
 		})
 		res := c.doRound(ctx, url, session, body)
 		if !res.ok {
-			// Text normally ends the loop — except a lookup-intent ack
-			// with no function call behind it. Nudge once (the loop cap
-			// still bounds total rounds); a second ack returns as-is.
-			// Tool-free turns (greetings) pass straight through.
-			if !nudged && exec != nil && len(tools) > 0 && isLookupAck(res.reply) {
-				nudged = true
-				input = append(input, Message{Role: "assistant", Content: res.reply})
-				input = append(input, Message{Role: "user", Content: ackNudge})
-				continue
-			}
+			// First text ends the loop, always — no ack detection. Telling
+			// a stranded ack from a greeting takes content judgment, and
+			// neither a verb list nor a second model call earns its keep:
+			// the prompt already orders "function call or final answer",
+			// and every question now has a valid tool (war_status closed
+			// the gap that stranded the production incident).
 			return res.reply
 		}
 		var calls []outputItem
@@ -365,6 +373,12 @@ func (c *Client) ChatWithTools(ctx context.Context, system, query string, histor
 			if item.Type == "function_call" {
 				calls = append(calls, item)
 			}
+		}
+		if res.text != "" {
+			// Narration co-present with calls is context, never the answer:
+			// verbatim into history (model-facing only — Sanitize runs
+			// solely on the final reply path).
+			input = append(input, Message{Role: "assistant", Content: res.text})
 		}
 		if len(calls) == 0 {
 			// No text either (doRound would have returned it): stop

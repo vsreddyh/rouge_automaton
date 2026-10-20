@@ -65,6 +65,17 @@ func TestIntelPromptHasNoBackstory(t *testing.T) {
 	if !strings.Contains(got, "Helldiver") || !strings.Contains(got, "Over.") {
 		t.Fatal("intel prompt must keep voice card (Helldiver, Over.)")
 	}
+	// The serial is backstory, not a signature: it belongs to SOUL.md only,
+	// so everyday prompts never prime the model to paste it into a greeting.
+	if strings.Contains(got, "[REDACTED]") {
+		t.Fatal("intel prompt must not carry the serial")
+	}
+	if n := strings.Count(got, "Helldiver"); n > 1 {
+		t.Fatalf("Helldiver must not be repeated in everyday prompts, got %d", n)
+	}
+	if !strings.Contains(got, "name a target") {
+		t.Fatal("prompts must keep the no-helpdesk / no-target rule")
+	}
 	if !strings.Contains(got, "never refuse") {
 		t.Fatal("intel prompt must keep the equal-faction never-refuse rule")
 	}
