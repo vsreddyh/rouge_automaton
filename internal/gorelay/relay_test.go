@@ -256,6 +256,77 @@ func TestChatWithToolsNilExec(t *testing.T) {
 	}
 }
 
+// TestChatWithToolsExhausted pins issue #43 path (c): three tool rounds
+// with no final answer must resolve to Exhausted, never Dead, so a healthy
+// uplink with thin intel cannot read as an outage.
+func TestChatWithToolsExhausted(t *testing.T) {
+	rounds := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rounds++
+		w.Write([]byte(`{"output":[{"type":"function_call","call_id":"call_` + string(rune('0'+rounds)) + `","name":"search_gear","arguments":"{}"}]}`))
+	}))
+	defer srv.Close()
+	c := &Client{BaseURL: srv.URL, HTTP: srv.Client()}
+	got := c.ChatWithTools(context.Background(), "", "best loadout vs Automatons?", nil, "s",
+		[]ToolDef{{Name: "search_gear"}},
+		func(ctx context.Context, name, args string) string { return "some intel" })
+	if got != Exhausted {
+		t.Fatalf("exhaustion must be Exhausted, got %q", got)
+	}
+	if got == Dead {
+		t.Fatalf("exhaustion must never read as Dead")
+	}
+	if rounds != 3 {
+		t.Fatalf("must run all %d tool rounds, got %d", maxToolRounds, rounds)
+	}
+}
+
+// TestChatWithToolsEmptyFirstRoundRetry pins issue #43 path (2): a
+// content-free first round on a no-tool turn gets one retry, so a single
+// blank envelope cannot fail an answerable greeting as Dead.
+func TestChatWithToolsEmptyFirstRoundRetry(t *testing.T) {
+	rounds := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rounds++
+		if rounds == 1 {
+			w.Write([]byte(`{"output":[]}`))
+			return
+		}
+		w.Write([]byte(`{"output":[{"type":"message","content":[{"type":"output_text","text":"Hi. Over."}]}]}`))
+	}))
+	defer srv.Close()
+	c := &Client{BaseURL: srv.URL, HTTP: srv.Client()}
+	got := c.ChatWithTools(context.Background(), "", "who are you?", nil, "s", nil,
+		func(ctx context.Context, name, args string) string { return "" })
+	if got != "Hi. Over." {
+		t.Fatalf("empty first round must retry to an answer, got %q", got)
+	}
+	if rounds != 2 {
+		t.Fatalf("must retry once after an empty first round, got %d rounds", rounds)
+	}
+}
+
+// TestChatWithToolsBusyNoRetry guards the retry: a throttled first round
+// resolves to Busy immediately with no second request.
+func TestChatWithToolsBusyNoRetry(t *testing.T) {
+	rounds := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rounds++
+		w.Header().Set("Retry-After", "7")
+		w.WriteHeader(429)
+	}))
+	defer srv.Close()
+	c := &Client{BaseURL: srv.URL, HTTP: srv.Client()}
+	got := c.ChatWithTools(context.Background(), "", "who are you?", nil, "s", nil,
+		func(ctx context.Context, name, args string) string { return "" })
+	if !strings.Contains(got, "7s") {
+		t.Fatalf("throttled turn must be Busy, got %q", got)
+	}
+	if rounds != 1 {
+		t.Fatalf("busy must not retry, got %d rounds", rounds)
+	}
+}
+
 func TestProbe(t *testing.T) {
 	cases := []struct {
 		name   string

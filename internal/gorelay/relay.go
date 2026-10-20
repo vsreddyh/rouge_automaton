@@ -26,6 +26,11 @@ const (
 	// Dead is the reply for every other backend failure. Short and final:
 	// no fallback model exists, so the bot says so in character.
 	Dead = "Uplink dead. No fallback. For Super Earth, try later."
+	// Exhausted is the reply when the model keeps calling tools instead of
+	// answering and falls off the maxToolRounds loop. The uplink is healthy
+	// in this case — the intel is just thin — so it must never read as
+	// Dead, or ops cannot triage from user reports.
+	Exhausted = "Couldn't pin it down — intel thin or scattered. Unconfirmed. Narrow the target and try again."
 )
 
 // retryRe extracts an ETA number from error text like "retry after 12".
@@ -323,7 +328,12 @@ const maxToolRounds = 3
 // answering. Message text with no tool call behind it ends the loop; text
 // beside calls rides into history as context while the calls execute. Tool
 // results that are errors stay inside the loop as tool outputs; relay
-// failures resolve to the same canned replies as Chat.
+// failures resolve to the same canned replies as Chat. Loop exhaustion
+// (maxToolRounds of tool calls with no final answer) resolves to Exhausted,
+// never Dead, so a healthy uplink with thin intel cannot read as an outage.
+// A content-free first round (empty envelope or reasoning-only items) gets
+// one retry: transient empties on no-tool turns — e.g. identity greetings —
+// must not surface as Dead on a single blank reply.
 func (c *Client) ChatWithTools(ctx context.Context, system, query string, history []Message, session string, tools []ToolDef, exec func(ctx context.Context, name, args string) string) string {
 	// Same sliding window as Chat, but as []any so raw function_call items
 	// and outputs can be appended verbatim in later rounds.
@@ -359,6 +369,14 @@ func (c *Client) ChatWithTools(ctx context.Context, system, query string, histor
 			"reasoning": map[string]any{"effort": "low"},
 		})
 		res := c.doRound(ctx, url, session, body)
+		if round == 0 && isEmptyFirstRound(res) {
+			// One retry for no-tool turns that come back empty: a single
+			// blank envelope must not fail an answerable question. Busy
+			// never lands here (isEmptyFirstRound matches Dead only), so
+			// throttled turns still return immediately without a retry.
+			log.Printf("gorelay: empty first round, retrying session=%s query=%q", session, trunc(query, 120))
+			res = c.doRound(ctx, url, session, body)
+		}
 		if !res.ok {
 			// First text ends the loop, always — no ack detection. Telling
 			// a stranded ack from a greeting takes content judgment, and
@@ -382,7 +400,9 @@ func (c *Client) ChatWithTools(ctx context.Context, system, query string, histor
 		}
 		if len(calls) == 0 {
 			// No text either (doRound would have returned it): stop
-			// rather than spin on content-free rounds.
+			// rather than spin on content-free rounds. Genuine relay
+			// failure, so Dead — distinct from loop exhaustion below.
+			log.Printf("gorelay: content-free tool round session=%s round=%d query=%q", session, round, trunc(query, 120))
 			return Dead
 		}
 		if exec == nil {
@@ -401,7 +421,31 @@ func (c *Client) ChatWithTools(ctx context.Context, system, query string, histor
 			})
 		}
 	}
-	return Dead
+	// Fell off the loop with tool calls every round and no final answer.
+	// The backends are reachable here — the model just never answered — so
+	// Exhausted, never Dead. Logged with session + query so the trigger
+	// stops being invisible in ops triage.
+	log.Printf("gorelay: tool loop exhausted session=%s query=%q", session, trunc(query, 120))
+	return Exhausted
+}
+
+// isEmptyFirstRound reports whether res carries no answer and no tool call:
+// a Dead envelope (!ok with Dead reply — Busy excluded) or an ok round with
+// neither text nor function calls (reasoning-only items). Only the first
+// round qualifies for the retry in ChatWithTools.
+func isEmptyFirstRound(res roundResult) bool {
+	if !res.ok {
+		return res.reply == Dead
+	}
+	if res.text != "" {
+		return false
+	}
+	for _, item := range res.items {
+		if item.Type == "function_call" {
+			return false
+		}
+	}
+	return true
 }
 
 func trunc(s string, n int) string {

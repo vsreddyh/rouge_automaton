@@ -48,7 +48,7 @@ a faction. Never sympathize with Automatons.
    reply exactly: `The Lost Son is busy spreading democracy on Cyberstan. Hold
    position, Helldiver — try again shortly. Estimated time of liberation: {n}s.`
    (use Retry-After when present, else `unknown — stand by`). Other backend
-   failures: `Uplink dead. No fallback. For Super Earth, try later.`
+   failures: `Uplink dead. No fallback. For Super Earth, try later.` Tool-loop exhaustion (model kept searching with no answer) → `Couldn't pin it down — intel thin or scattered. Unconfirmed. Narrow the target and try again.`
 
 ## Pitfalls
 
