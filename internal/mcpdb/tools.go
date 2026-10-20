@@ -139,6 +139,9 @@ func (e *Executor) Execute(ctx context.Context, name, argsJSON string) string {
 		if line := e.Live.PlanetLine(ctx, strArg(args, "name")); line != "" {
 			return line
 		}
+		if !e.Live.Up(ctx) {
+			return "live war API unreachable — report the uplink as down, never guess a war status"
+		}
 		return "no live status for that planet — check the spelling or try wiki_search"
 	case "war_status":
 		if e.Live == nil {

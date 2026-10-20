@@ -1,8 +1,15 @@
 package mcpdb
 
 import (
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"rouge_automaton/internal/config"
+	"rouge_automaton/internal/live"
 )
 
 func TestToolDefs(t *testing.T) {
@@ -68,5 +75,67 @@ func TestIntArgShapes(t *testing.T) {
 	}
 	if got := intArg(map[string]any{}, "k", 3); got != 3 {
 		t.Fatalf("missing k must default, got %d", got)
+	}
+}
+
+// liveServer serves a canned war roster (live=true) or a dead uplink
+// (live=false) behind the four Training Manual endpoints.
+func liveServer(t *testing.T, liveOK bool) *httptest.Server {
+	t.Helper()
+	bodies := map[string]string{}
+	if liveOK {
+		var status, infos []map[string]any
+		names := map[string]any{}
+		for i := 0; i < 120; i++ {
+			idx := 1000 + i
+			players := 0.0
+			if i == 0 {
+				players = 5
+			}
+			status = append(status, map[string]any{
+				"index": idx, "owner": 1, "health": 1000000, "players": players,
+			})
+			infos = append(infos, map[string]any{"index": idx, "maxHealth": 1000000})
+			names[fmt.Sprint(idx)] = map[string]any{"name": fmt.Sprintf("Filler %d", i)}
+		}
+		marshal := func(v any) string {
+			raw, err := json.Marshal(v)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return string(raw)
+		}
+		bodies["/war/campaign"] = "[]"
+		bodies["/war/status"] = marshal(map[string]any{"planetStatus": status})
+		bodies["/war/info"] = marshal(map[string]any{"planetInfos": infos})
+		bodies["/planets"] = marshal(names)
+	}
+	mux := http.NewServeMux()
+	for _, p := range []string{"/war/campaign", "/war/status", "/war/info", "/planets"} {
+		body := bodies[p]
+		mux.HandleFunc(p, func(w http.ResponseWriter, r *http.Request) {
+			if !liveOK {
+				w.WriteHeader(500)
+				return
+			}
+			w.Write([]byte(body))
+		})
+	}
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// TestPlanetStatusOutageVsUnknown pins the issue-46 contract: an unknown
+// name on a live roster blames the spelling, but a dead uplink reports the
+// uplink down instead of faulting the user's spelling.
+func TestPlanetStatusOutageVsUnknown(t *testing.T) {
+	e := &Executor{Live: live.New(config.Config{HD2APIBase: liveServer(t, true).URL})}
+	if got := e.Execute(t.Context(), "planet_status", `{"name":"No Such Planet"}`); !strings.Contains(got, "check the spelling") {
+		t.Fatalf("unknown name on live roster: %q", got)
+	}
+	e = &Executor{Live: live.New(config.Config{HD2APIBase: liveServer(t, false).URL})}
+	if got := e.Execute(t.Context(), "planet_status", `{"name":"Mintoria"}`); !strings.Contains(got, "uplink as down") {
+		t.Fatalf("outage must report uplink down: %q", got)
 	}
 }

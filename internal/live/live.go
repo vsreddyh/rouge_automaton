@@ -1,13 +1,17 @@
-// Package live serves Type-L galactic war status from the community API
-// with a 5-minute cache. Ports bot/live.py.
+// Package live serves Type-L galactic war status from the Helldivers
+// Training Manual community API (a live mirror of the official war feed)
+// with a 5-minute cache. Ports bot/live.py cache semantics.
 package live
 
 import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"math"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -31,7 +35,6 @@ type Client struct {
 func New(cfg config.Config) *Client {
 	return &Client{Base: cfg.HD2APIBase, Contact: cfg.XSuperContact, Client: cfg.XSuperClient}
 }
-
 func (c *Client) http() *http.Client {
 	if c.HTTP != nil {
 		return c.HTTP
@@ -49,29 +52,185 @@ func (c *Client) planets(ctx context.Context) []map[string]any {
 	if time.Since(at) < 5*time.Minute && cached != nil {
 		return cached
 	}
-	req, err := http.NewRequestWithContext(ctx, "GET", c.Base+"/planets", nil)
-	if err != nil {
-		return cached
+	if fresh := c.refresh(ctx); fresh != nil {
+		c.mu.Lock()
+		c.plans, c.at = fresh, time.Now()
+		c.mu.Unlock()
+		return fresh
 	}
-	req.Header.Set("X-Super-Client", c.Client)
-	req.Header.Set("X-Super-Contact", c.Contact)
-	req.Header.Set("User-Agent", "rouge-automaton/1.0")
-	resp, err := c.http().Do(req)
+	return cached
+}
+
+// htmPaths are the Training Manual endpoints joined into one roster per
+// refresh, all rooted at Base: campaign carries the active-front detail
+// (faction, defense, expiry), status the galaxy-wide per-planet owners and
+// player counts, info the per-planet max health, and planets the
+// index-to-name table.
+var htmPaths = []string{"/war/campaign", "/war/status", "/war/info", "/planets"}
+
+// minRoster is the staleness floor for a full-roster refresh: the live
+// roster runs ~270 planets, so anything far smaller is a broken upstream
+// snapshot, not a quiet war — treat it as an outage and keep the cache.
+const minRoster = 100
+
+// fetchBody GETs url with the war-API headers, returning the body on 200.
+func fetchBody(ctx context.Context, client *http.Client, url, superClient, contact string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
-		return cached
+		return nil, err
+	}
+	req.Header.Set("X-Super-Client", superClient)
+	req.Header.Set("X-Super-Contact", contact)
+	req.Header.Set("User-Agent", "rouge-automaton/1.0")
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
-		return cached
+		return nil, fmt.Errorf("war api %s: status %d", url, resp.StatusCode)
 	}
-	var out []map[string]any
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return cached
+	return io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+}
+
+// refresh rebuilds the roster from the war API. Any fetch or decode failure
+// — or a stale-looking payload (implausibly small roster, zero divers
+// galaxy-wide) — returns nil so the caller keeps serving the cache, or
+// reports the uplink down when there is no cache at all.
+func (c *Client) refresh(ctx context.Context) []map[string]any {
+	bodies := make([][]byte, len(htmPaths))
+	errs := make([]error, len(htmPaths))
+	var wg sync.WaitGroup
+	for i, p := range htmPaths {
+		wg.Add(1)
+		go func(i int, p string) {
+			defer wg.Done()
+			body, err := fetchBody(ctx, c.http(), c.Base+p, c.Client, c.Contact)
+			bodies[i], errs[i] = body, err
+		}(i, p)
 	}
-	c.mu.Lock()
-	c.plans, c.at = out, time.Now()
-	c.mu.Unlock()
-	return out
+	wg.Wait()
+	for _, err := range errs {
+		if err != nil {
+			return nil
+		}
+	}
+	var campaign []map[string]any
+	var status, info, names map[string]any
+	if err := json.Unmarshal(bodies[0], &campaign); err != nil {
+		return nil
+	}
+	if err := json.Unmarshal(bodies[1], &status); err != nil {
+		return nil
+	}
+	if err := json.Unmarshal(bodies[2], &info); err != nil {
+		return nil
+	}
+	if err := json.Unmarshal(bodies[3], &names); err != nil {
+		return nil
+	}
+	return joinRoster(campaign, status, info, names)
+}
+
+// ownerLabel maps the official owner code to the display owner.
+func ownerLabel(code int) string {
+	switch code {
+	case 1:
+		return "Humans"
+	case 2:
+		return "Terminids"
+	case 3:
+		return "Automatons"
+	case 4:
+		return "Illuminate"
+	}
+	return "Unknown"
+}
+
+// joinRoster folds the four war payloads into the planet roster PlanetLine
+// and WarStatus read: one entry per status planet with its display owner,
+// liberation health, divers, and — for contested planets — the live event.
+// Returns nil when the payload looks stale (tiny roster or a galaxy with
+// zero divers) so the outage path keeps the cache instead of printing a
+// false dead galaxy.
+func joinRoster(campaign []map[string]any, status, info, names map[string]any) []map[string]any {
+	maxByIndex := map[int]float64{}
+	if list, ok := info["planetInfos"].([]any); ok {
+		for _, e := range list {
+			if m, ok := e.(map[string]any); ok {
+				maxByIndex[int(num(m, "index"))] = num(m, "maxHealth")
+			}
+		}
+	}
+	campByIndex := map[int]map[string]any{}
+	for _, e := range campaign {
+		campByIndex[int(num(e, "planetIndex"))] = e
+	}
+	statusList, _ := status["planetStatus"].([]any)
+	plans := make([]map[string]any, 0, len(statusList))
+	for _, e := range statusList {
+		m, ok := e.(map[string]any)
+		if !ok {
+			continue
+		}
+		idx := int(num(m, "index"))
+		name := ""
+		if nm, ok := names[strconv.Itoa(idx)].(map[string]any); ok {
+			name = str(nm, "name")
+		}
+		camp := campByIndex[idx]
+		if name == "" {
+			// New or unlisted index: the campaign entry still names it.
+			name = str(camp, "name")
+		}
+		if strings.TrimSpace(name) == "" {
+			// Nameless payload entries carry no addressable planet.
+			continue
+		}
+		p := map[string]any{
+			"name":         name,
+			"currentOwner": ownerLabel(int(num(m, "owner"))),
+			"health":       num(m, "health"),
+			"maxHealth":    maxByIndex[idx],
+			"players":      num(m, "players"),
+		}
+		if camp != nil {
+			kind := 0.0
+			if defense, _ := camp["defense"].(bool); defense {
+				kind = 1.0
+			}
+			ev := map[string]any{
+				"eventType": kind,
+				"faction":   str(camp, "faction"),
+				"health":    num(camp, "health"),
+				"maxHealth": num(camp, "maxHealth"),
+			}
+			if exp := num(camp, "expireDateTime"); exp > 0 {
+				sec, frac := math.Modf(exp)
+				ev["endTime"] = time.Unix(int64(sec), int64(frac*1e9)).UTC().Format(time.RFC3339)
+			}
+			p["event"] = ev
+		}
+		plans = append(plans, p)
+	}
+	if len(plans) < minRoster {
+		return nil
+	}
+	var total float64
+	for _, p := range plans {
+		total += num(p, "players")
+	}
+	if total == 0 {
+		return nil
+	}
+	return plans
+}
+
+// Up reports whether the war uplink is serving a usable roster: true when a
+// cached or fresh fetch yields planets. It lets callers tell an outage
+// (report the uplink down) apart from an unknown planet name.
+func (c *Client) Up(ctx context.Context) bool {
+	return len(c.planets(ctx)) > 0
 }
 
 func num(m map[string]any, key string) float64 {
