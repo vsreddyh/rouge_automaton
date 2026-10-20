@@ -2,8 +2,10 @@
 // Safe to re-run: seed fields apply on insert only ($setOnInsert), so
 // wiki-enriched docs from the crawler are never clobbered.
 //
-// TODO: seed files carry units only; the structures collection has no seed
-// source (same gap as the Python scripts).
+// TODO: seed files cover units and structures only; gear (weapons,
+// stratagems, armor, boosters) and world (biomes, planets, missions,
+// difficulty, effects) collections still rely on the wiki crawl until
+// curated seed files land (same data/*.json shape, $setOnInsert semantics).
 package main
 
 import (
@@ -25,15 +27,24 @@ import (
 	"rouge_automaton/internal/config"
 )
 
+type unitSeed struct {
+	Name       string   `json:"name"`
+	Aliases    []string `json:"aliases"`
+	Role       string   `json:"role"`
+	WeakPoints []string `json:"weak_points"`
+	Counters   []string `json:"counters"`
+}
+
+type structureSeed struct {
+	Name     string   `json:"name"`
+	Counters []string `json:"counters"`
+	Note     string   `json:"note"`
+}
+
 type dataFile struct {
-	Faction string `json:"faction"`
-	Units   []struct {
-		Name       string   `json:"name"`
-		Aliases    []string `json:"aliases"`
-		Role       string   `json:"role"`
-		WeakPoints []string `json:"weak_points"`
-		Counters   []string `json:"counters"`
-	} `json:"units"`
+	Faction    string          `json:"faction"`
+	Units      []unitSeed      `json:"units"`
+	Structures []structureSeed `json:"structures"`
 }
 
 func main() {
@@ -42,6 +53,32 @@ func main() {
 	if err := run(); err != nil {
 		log.Fatalf("ingest: %v", err)
 	}
+}
+
+// ensureIndexes creates the unique indexes the exact tools rely on:
+// (faction, name) for units and structures, name for gear and world
+// collections. Idempotent: CreateOne is a no-op when the index exists.
+func ensureIndexes(ctx context.Context, db *mongo.Database) error {
+	pair := mongo.IndexModel{
+		Keys:    bson.D{{Key: "faction", Value: 1}, {Key: "name", Value: 1}},
+		Options: options.Index().SetUnique(true),
+	}
+	for _, coll := range []string{"units", "structures"} {
+		if _, err := db.Collection(coll).Indexes().CreateOne(ctx, pair); err != nil {
+			return fmt.Errorf("index %s: %w", coll, err)
+		}
+	}
+	single := mongo.IndexModel{
+		Keys:    bson.D{{Key: "name", Value: 1}},
+		Options: options.Index().SetUnique(true),
+	}
+	for _, coll := range []string{"weapons", "stratagems", "armor", "boosters",
+		"biomes", "planets", "missions", "difficulty", "effects"} {
+		if _, err := db.Collection(coll).Indexes().CreateOne(ctx, single); err != nil {
+			return fmt.Errorf("index %s: %w", coll, err)
+		}
+	}
+	return nil
 }
 
 func run() error {
@@ -68,13 +105,10 @@ func run() error {
 	db := client.Database(config.Config{MongoURI: *mongoURI}.DBName())
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	coll := db.Collection("units")
-	if _, err := coll.Indexes().CreateOne(ctx, mongo.IndexModel{
-		Keys:    bson.D{{Key: "faction", Value: 1}, {Key: "name", Value: 1}},
-		Options: options.Index().SetUnique(true),
-	}); err != nil {
-		return fmt.Errorf("index: %w", err)
+	if err := ensureIndexes(ctx, db); err != nil {
+		return err
 	}
+	coll := db.Collection("units")
 	// name -> aliases for coverage checks. Project only what covered()
 	// needs: pulling whole docs here would drag wiki_text/blob payloads
 	// for a membership test.
@@ -127,7 +161,8 @@ func run() error {
 		}
 		return false
 	}
-	var ops []mongo.WriteModel
+	var unitOps []mongo.WriteModel
+	var structOps []mongo.WriteModel
 	for _, f := range files {
 		raw, err := os.ReadFile(f)
 		if err != nil {
@@ -161,20 +196,53 @@ func run() error {
 				// timestamp. An explicit null would sit beside strings in
 				// the same field across docs.
 			}
-			ops = append(ops, mongo.NewUpdateOneModel().
+			unitOps = append(unitOps, mongo.NewUpdateOneModel().
 				SetFilter(bson.M{"faction": faction, "name": u.Name}).
 				SetUpdate(bson.M{"$setOnInsert": seed}).
 				SetUpsert(true))
 		}
+		for _, s := range d.Structures {
+			if s.Name == "" || covered(s.Name) {
+				continue
+			}
+			parts := append([]string{s.Name, faction}, s.Counters...)
+			parts = append(parts, s.Note)
+			seed := bson.M{
+				"faction": faction, "name": s.Name, "counters": s.Counters,
+				"note": s.Note, "role": s.Note,
+				"text_blob":     strings.Join(parts, " | "),
+				"source":        "data/" + filepath.Base(f),
+				"source_url":    "",
+				"rev_id":        0,
+				"patch_version": "",
+			}
+			structOps = append(structOps, mongo.NewUpdateOneModel().
+				SetFilter(bson.M{"faction": faction, "name": s.Name}).
+				SetUpdate(bson.M{"$setOnInsert": seed}).
+				SetUpsert(true))
+		}
 	}
-	if len(ops) == 0 {
+	if len(unitOps) == 0 && len(structOps) == 0 {
 		fmt.Println("ingest: nothing to do")
 		return nil
 	}
-	res, err := coll.BulkWrite(ctx, ops)
-	if err != nil {
-		return err
+	var upserted, matched int64
+	if len(unitOps) > 0 {
+		res, err := db.Collection("units").BulkWrite(ctx, unitOps)
+		if err != nil {
+			return err
+		}
+		upserted += res.UpsertedCount
+		matched += res.MatchedCount
 	}
-	fmt.Printf("ingest: upserted=%d matched=%d\n", res.UpsertedCount, res.MatchedCount)
+	if len(structOps) > 0 {
+		res, err := db.Collection("structures").BulkWrite(ctx, structOps)
+		if err != nil {
+			return err
+		}
+		upserted += res.UpsertedCount
+		matched += res.MatchedCount
+	}
+	fmt.Printf("ingest: upserted=%d matched=%d\n", upserted, matched)
 	return nil
 }

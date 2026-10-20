@@ -23,19 +23,23 @@ import (
 // stays in SOUL.md; this block is procedure, not character.
 const ToolGuidance = `
 Tool procedure: for any factual question (units, gear, places, war status),
-call the matching search tool BEFORE answering — never answer from memory.
-War status ("war status", "how goes the war", "what's the front") is one
-war_status call with no arguments, answered directly — never stall on an ack.
+fetch the exact doc by name first (get_unit, get_gear, get_place) — never
+answer from memory. Aliases resolve server-side, so pass the name you heard.
+When the name is unknown, list candidates first (list_units, list_gear),
+then fetch the exact doc. War status ("war status", "how goes the war",
+"what's the front") is one war_status call with no arguments, answered
+directly — never stall on an ack.
 Never narrate intent ("Checking...", "Looking it up...", "Pulling..."): if you
 need data, your whole response is exactly one function call, never an
 acknowledgement. Either emit the function call or the final answer — an ack
 without a call strands the user with nothing.
-You may chain calls (e.g. search_units, then planet_status for one planet).
-Every intel answer names weak point + counter + source, as fully as the
-question needs, and ends with "Over." on its own beat. If a tool returns no
-results, try wiki_search before giving up; when the query is genuinely
-ambiguous and no tool resolves it, ask one short clarifying question instead
-of guessing or looping searches until rounds run out.`
+You may chain calls (e.g. list_units, then get_unit; get_unit, then
+planet_status for one planet). Every intel answer names weak point + counter
++ source, as fully as the question needs, and ends with "Over." on its own
+beat. If a fetch misses, list-then-fetch before wiki_search; use wiki_search
+only when the store has nothing. When the query is genuinely ambiguous and
+no tool resolves it, ask one short clarifying question instead of guessing
+or looping fetches until rounds run out.`
 
 // Executor runs tool calls against Mongo and the live/wiki backends.
 type Executor struct {
@@ -69,27 +73,36 @@ func ToolDefs() []gorelay.ToolDef {
 		}
 		return map[string]any{"type": "object", "properties": props, "required": required}
 	}
-	kProp := map[string]any{"type": "integer", "description": "max docs to return (default 3, max 5)"}
+	limitProp := map[string]any{"type": "integer", "description": "max docs to return (default 10, max 20)"}
 	return []gorelay.ToolDef{
-		{Name: "search_units",
-			Description: "Search enemy units and structures (weak points, counters, health, anatomy). Use for any 'how to kill X' question.",
+		{Name: "get_unit",
+			Description: "Fetch one enemy unit or structure by exact name or alias (case-insensitive, e.g. Hulk Bruiser or hulk). Full doc: role, weak points, counters, source. Use for any 'how to kill X' question.",
 			Parameters: obj(map[string]any{
-				"query":   strProp("unit or structure name keywords, e.g. Hulk Bruiser"),
+				"name": strProp("exact unit or structure name or alias, e.g. Hulk Bruiser"),
+			}, "name")},
+		{Name: "list_units",
+			Description: "List the faction-filtered unit roster (names and roles). Use when the unit name is unknown or for 'what am I facing' questions, then get_unit for detail.",
+			Parameters: obj(map[string]any{
 				"faction": map[string]any{"type": "string", "description": "one of automatons, terminids, illuminate", "enum": []string{"automatons", "terminids", "illuminate"}},
-				"k":       kProp,
-			}, "query")},
-		{Name: "search_gear",
-			Description: "Search weapons, stratagems, armor and boosters (damage, penetration, cooldowns, costs). Use for loadout questions.",
+				"role":    strProp("optional role substring filter, e.g. walker"),
+				"limit":   limitProp,
+			}, "faction")},
+		{Name: "get_gear",
+			Description: "Fetch one weapon, stratagem, armor or booster by exact name or alias (case-insensitive). Full doc with source. Use for loadout detail questions.",
 			Parameters: obj(map[string]any{
-				"query": strProp("gear name or role keywords, e.g. Orbital Railcannon"),
-				"k":     kProp,
-			}, "query")},
-		{Name: "search_world",
-			Description: "Search biomes, planets, missions, difficulties and environmental effects (conditions, hazards, weather). Use for where-to-fight questions.",
+				"name": strProp("exact gear name or alias, e.g. Orbital Railcannon"),
+			}, "name")},
+		{Name: "list_gear",
+			Description: "List one gear shelf by category (names only). Use when the gear name is unknown, then get_gear for detail.",
 			Parameters: obj(map[string]any{
-				"query": strProp("place, biome, mission or effect keywords, e.g. Tundra"),
-				"k":     kProp,
-			}, "query")},
+				"category": map[string]any{"type": "string", "description": "one of weapons, stratagems, armor, boosters", "enum": []string{"weapons", "stratagems", "armor", "boosters"}},
+				"limit":    limitProp,
+			}, "category")},
+		{Name: "get_place",
+			Description: "Fetch one static planet, biome, mission, difficulty or effect by exact name (case-insensitive). Use for where-to-fight questions. Live ownership stays on planet_status.",
+			Parameters: obj(map[string]any{
+				"name": strProp("exact place, biome, mission or effect name, e.g. Tundra"),
+			}, "name")},
 		{Name: "war_status",
 			Description: "Live galactic war status: active fronts per faction, hottest battles, divers deployed. Takes no arguments — use for any generic war-status question instead of asking the user for a planet.",
 			Parameters:  obj(map[string]any{})},
@@ -114,24 +127,63 @@ func (e *Executor) Execute(ctx context.Context, name, argsJSON string) string {
 	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
 		return "invalid arguments: expected a JSON object"
 	}
-	query := strArg(args, "query")
-	k := intArg(args, "k", 3)
-	if k < 1 {
-		k = 1
-	}
-	if k > 5 {
-		k = 5
-	}
 	switch name {
-	case "search_units":
-		docs := SearchUnits(ctx, e.DB, query, strArg(args, "faction"), k)
-		return withEmptyHint(FormatContext(docs), query)
-	case "search_gear":
-		docs := SearchGear(ctx, e.DB, query, k)
-		return withEmptyHint(FormatContext(docs), query)
-	case "search_world":
-		docs := SearchWorld(ctx, e.DB, query, k)
-		return withEmptyHint(FormatContext(docs), query)
+	case "get_unit":
+		want := strArg(args, "name")
+		if want == "" {
+			return "get_unit needs a name"
+		}
+		if e.DB == nil {
+			return "local intel store not wired — report as unconfirmed"
+		}
+		if doc, _, ok := GetUnit(ctx, e.DB, want); ok {
+			return FormatFull(doc)
+		}
+		return "no local intel for that name — try list_units for the canonical roster, or wiki_search"
+	case "list_units":
+		faction := strArg(args, "faction")
+		if !Factions[strings.ToLower(faction)] {
+			return "unknown faction — one of automatons, terminids, illuminate"
+		}
+		if e.DB == nil {
+			return "local intel store not wired — report as unconfirmed"
+		}
+		docs := ListUnits(ctx, e.DB, faction, strArg(args, "role"), intArg(args, "limit", defaultListLimit))
+		return withEmptyHint(FormatContext(docs), "")
+	case "get_gear":
+		want := strArg(args, "name")
+		if want == "" {
+			return "get_gear needs a name"
+		}
+		if e.DB == nil {
+			return "local intel store not wired — report as unconfirmed"
+		}
+		if doc, _, ok := GetGear(ctx, e.DB, want); ok {
+			return FormatFull(doc)
+		}
+		return "no local intel for that name — try list_gear for the canonical shelf, or wiki_search"
+	case "list_gear":
+		category := strArg(args, "category")
+		if !GearCategories[strings.ToLower(category)] {
+			return "unknown category — one of weapons, stratagems, armor, boosters"
+		}
+		if e.DB == nil {
+			return "local intel store not wired — report as unconfirmed"
+		}
+		docs := ListGear(ctx, e.DB, category, intArg(args, "limit", defaultListLimit))
+		return withEmptyHint(FormatContext(docs), "")
+	case "get_place":
+		want := strArg(args, "name")
+		if want == "" {
+			return "get_place needs a name"
+		}
+		if e.DB == nil {
+			return "local intel store not wired — report as unconfirmed"
+		}
+		if doc, _, ok := GetPlace(ctx, e.DB, want); ok {
+			return FormatFull(doc)
+		}
+		return "no local intel for that name — check the spelling or try wiki_search"
 	case "planet_status":
 		if e.Live == nil {
 			return "live war API not wired — report the uplink as down, never guess"
@@ -151,6 +203,7 @@ func (e *Executor) Execute(ctx context.Context, name, argsJSON string) string {
 		}
 		return "live war API unreachable — report the uplink as down, never guess a war status"
 	case "wiki_search":
+		query := strArg(args, "query")
 		if query == "" {
 			return "wiki_search needs a query"
 		}
@@ -162,15 +215,15 @@ func (e *Executor) Execute(ctx context.Context, name, argsJSON string) string {
 		}
 		return "wiki has nothing on that either — report it as unconfirmed"
 	default:
-		return fmt.Sprintf("unknown tool %q — available: search_units, search_gear, search_world, war_status, planet_status, wiki_search", name)
+		return fmt.Sprintf("unknown tool %q — available: get_unit, list_units, get_gear, list_gear, get_place, war_status, planet_status, wiki_search", name)
 	}
 }
 
 // withEmptyHint turns an empty result into guidance the model can act on
 // (try another tool) instead of a dead end it might present as fact.
-func withEmptyHint(formatted, query string) string {
+func withEmptyHint(formatted, _ string) string {
 	if strings.TrimSpace(formatted) == "" {
-		return "no local intel for that — try a broader query or wiki_search"
+		return "no local intel for that — try a list tool for canonical names, or wiki_search"
 	}
 	return formatted
 }
@@ -182,7 +235,7 @@ func strArg(args map[string]any, key string) string {
 
 func intArg(args map[string]any, key string, def int) int {
 	// Same hardening as live.num: JSON decode gives float64 today, but the
-	// switch keeps k sane if a caller ever passes int shapes.
+	// switch keeps the limit sane if a caller ever passes int shapes.
 	switch v := args[key].(type) {
 	case float64:
 		return int(v)

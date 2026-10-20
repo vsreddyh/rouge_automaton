@@ -22,7 +22,7 @@ cmd/
 internal/
   config/           # .env contract (shared with the retired Python bot)
   persona/          # SOUL.md → system prompt, Over./serial/voice guards
-  mcpdb/            # Mongo keyword retrieval + cited context (no router)
+  mcpdb/            # Mongo exact-match intel tools + cited context (no router)
   gorelay/          # OpenCode Go relay client (Responses API + tool loop)
   discord/          # discordgo gateway: allowlist, mention gate, threads
   wiki/             # helldivers.wiki.gg fallback (search + fetch)
@@ -68,12 +68,15 @@ podman run --rm --network=host -e MONGO_URI=mongodb://127.0.0.1:27017/rouge \
 ## Answer pipeline
 
 1. Identity questions → answer from `SOUL.md` canon. Serial stays `[REDACTED]`.
-2. Factual questions → the model calls search tools itself (no code router):
-   `search_units` (weak points, counters, anatomy), `search_gear` (loadouts),
-   `search_world` (biomes, planets, missions), `war_status` (generic live war
-   summary: active fronts per faction, hottest battles, divers deployed),
-   `planet_status` (one named planet's live data). Candidates rank by keyword
-   overlap + name/alias bonus; every answer cites its source.
+2. Factual questions → the model calls exact tools itself (no code router):
+   `get_unit` (one unit/structure by exact name/alias), `list_units`
+   (faction roster, then `get_unit` for detail), `get_gear` (one gear item
+   by exact name), `list_gear` (one shelf by category, then `get_gear`),
+   `get_place` (one static planet/biome/mission by exact name),
+   `war_status` (generic live war summary: active fronts per faction,
+   hottest battles, divers deployed), `planet_status` (one named planet's
+   live data). Aliases resolve server-side; exact fetch returns the full
+   doc (role, weak points, counters, source). Every answer cites its source.
 3. Miss → the model falls back to `wiki_search` (`helldivers.wiki.gg`),
    summarized with links. Unknowns are reported as unconfirmed, not invented.
    Genuinely ambiguous queries with no resolving tool get one short

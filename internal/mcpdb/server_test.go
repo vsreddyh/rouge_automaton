@@ -38,13 +38,13 @@ func TestServerToolsEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(tools.Tools) != 6 {
-		t.Fatalf("want 6 tools, got %d", len(tools.Tools))
+	if len(tools.Tools) != 8 {
+		t.Fatalf("want 8 tools, got %d", len(tools.Tools))
 	}
 
 	res, err := session.CallTool(t.Context(), &mcp.CallToolParams{
-		Name:      "search_units",
-		Arguments: map[string]any{"query": "hulk", "faction": "automatons"},
+		Name:      "get_unit",
+		Arguments: map[string]any{"name": "hulk"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -58,12 +58,32 @@ func TestServerToolsEndToEnd(t *testing.T) {
 			text += tc.Text
 		}
 	}
-	if text != "canned:search_units" {
+	if text != "canned:get_unit" {
 		t.Fatalf("content = %q", text)
 	}
-	if len(stub.calls) != 1 || stub.calls[0][0] != "search_units" ||
-		!strings.Contains(stub.calls[0][1], `"faction":"automatons"`) {
+	if len(stub.calls) != 1 || stub.calls[0][0] != "get_unit" ||
+		!strings.Contains(stub.calls[0][1], `"name":"hulk"`) {
 		t.Fatalf("backend calls = %v", stub.calls)
+	}
+	// list_units must survive the protocol round trip with its typed args.
+	lres, err := session.CallTool(t.Context(), &mcp.CallToolParams{
+		Name:      "list_units",
+		Arguments: map[string]any{"faction": "automatons"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lres.IsError {
+		t.Fatal("list_units call flagged error")
+	}
+	ltext := ""
+	for _, c := range lres.Content {
+		if tc, ok := c.(*mcp.TextContent); ok {
+			ltext += tc.Text
+		}
+	}
+	if ltext != "canned:list_units" {
+		t.Fatalf("list_units content = %q", ltext)
 	}
 	// war_status takes no arguments: the no-arg handler must survive the
 	// protocol round trip (empty struct decode) and reach the backend.
@@ -86,7 +106,7 @@ func TestServerToolsEndToEnd(t *testing.T) {
 	if wtext != "canned:war_status" {
 		t.Fatalf("war_status content = %q", wtext)
 	}
-	if len(stub.calls) != 2 || stub.calls[1][0] != "war_status" {
+	if len(stub.calls) != 3 || stub.calls[2][0] != "war_status" {
 		t.Fatalf("backend calls = %v", stub.calls)
 	}
 }

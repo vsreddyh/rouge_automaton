@@ -14,8 +14,8 @@ import (
 
 func TestToolDefs(t *testing.T) {
 	defs := ToolDefs()
-	if len(defs) != 6 {
-		t.Fatalf("want 6 tools, got %d", len(defs))
+	if len(defs) != 8 {
+		t.Fatalf("want 8 tools, got %d", len(defs))
 	}
 	seen := map[string]bool{}
 	for _, d := range defs {
@@ -37,10 +37,36 @@ func TestExecuteUnknownAndBadArgs(t *testing.T) {
 	if got := e.Execute(t.Context(), "frobnicate", `{}`); !strings.Contains(got, "unknown tool") {
 		t.Fatalf("unknown tool: %q", got)
 	}
-	if got := e.Execute(t.Context(), "search_units", `not json`); !strings.Contains(got, "invalid arguments") {
+	if got := e.Execute(t.Context(), "get_unit", `not json`); !strings.Contains(got, "invalid arguments") {
 		t.Fatalf("bad args: %q", got)
 	}
-	// Nil DB would panic on search; unknown-arg paths must not reach it.
+	// Nil DB must fail closed on exact tools, never panic.
+	if got := e.Execute(t.Context(), "get_unit", `{"name":"hulk"}`); !strings.Contains(got, "not wired") {
+		t.Fatalf("nil DB on get_unit: %q", got)
+	}
+	if got := e.Execute(t.Context(), "list_units", `{"faction":"automatons"}`); !strings.Contains(got, "not wired") {
+		t.Fatalf("nil DB on list_units: %q", got)
+	}
+	if got := e.Execute(t.Context(), "get_gear", `{"name":"railcannon"}`); !strings.Contains(got, "not wired") {
+		t.Fatalf("nil DB on get_gear: %q", got)
+	}
+	if got := e.Execute(t.Context(), "list_gear", `{"category":"weapons"}`); !strings.Contains(got, "not wired") {
+		t.Fatalf("nil DB on list_gear: %q", got)
+	}
+	if got := e.Execute(t.Context(), "get_place", `{"name":"tundra"}`); !strings.Contains(got, "not wired") {
+		t.Fatalf("nil DB on get_place: %q", got)
+	}
+	// Missing names and bad enums fail before touching the store.
+	if got := e.Execute(t.Context(), "get_unit", `{}`); !strings.Contains(got, "needs a name") {
+		t.Fatalf("empty get_unit: %q", got)
+	}
+	if got := e.Execute(t.Context(), "list_units", `{"faction":"bots"}`); !strings.Contains(got, "unknown faction") {
+		t.Fatalf("bad faction: %q", got)
+	}
+	if got := e.Execute(t.Context(), "list_gear", `{"category":"gear"}`); !strings.Contains(got, "unknown category") {
+		t.Fatalf("bad category: %q", got)
+	}
+	// Wiki and live guards fail closed without clients, never panic.
 	if got := e.Execute(t.Context(), "wiki_search", `{}`); !strings.Contains(got, "needs a query") {
 		t.Fatalf("empty wiki query: %q", got)
 	}

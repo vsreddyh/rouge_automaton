@@ -143,7 +143,7 @@ func TestSanitize(t *testing.T) {
 		bad  []string
 		keep []string
 	}{
-		{"tool call", "Hulk. search_units(Hulk) Rear vent.", []string{"search_units("}, []string{"Rear vent"}},
+		{"tool call", "Hulk. get_unit(Hulk) Rear vent.", []string{"get_unit("}, []string{"Rear vent"}},
 		{"bare tool", "Intel says planet_status is held.", []string{"planet_status"}, []string{"is held"}},
 		{"call chain", "function_call call_id abc123 Rear vent.", []string{"function_call", "call_id", "abc123"}, []string{"Rear vent"}},
 		{"bare marker", "function_call Rear vent.", []string{"function_call"}, []string{"Rear vent"}},
@@ -152,12 +152,15 @@ func TestSanitize(t *testing.T) {
 		{"json args", `Rear vent. {"query":"Hulk","k":3}`, []string{`"query"`, "{"}, []string{"Rear vent"}},
 		{"json new keys", `Held. {"planet":"X","top_k":2}`, []string{"top_k", "{"}, []string{"Held"}},
 		{"prose braces kept", `Vent {front} exposed.`, []string{}, []string{"{front}"}},
-		{"narration", "Calling search_units now\nRear vent.", []string{"Calling search_units", "Calling now"}, []string{"Rear vent"}},
-		{"narration period", "Calling search_units now.\nRear vent.", []string{"Calling now"}, []string{"Rear vent"}},
-		{"narration sameline kept", "Calling search_units now Rear vent.", []string{}, []string{"Rear vent"}},
+		{"narration", "Calling get_unit now\nRear vent.", []string{"Calling get_unit", "Calling now"}, []string{"Rear vent"}},
+		{"narration period", "Calling get_unit now.\nRear vent.", []string{"Calling now"}, []string{"Rear vent"}},
+		{"narration sameline kept", "Calling get_unit now Rear vent.", []string{}, []string{"Rear vent"}},
 		{"call bare id", "call_id Rear vent.", []string{"call_id Rear"}, []string{"Rear vent"}},
 		{"function direct id", "function_call abc123 Rear vent.", []string{"function_call", "abc123"}, []string{"Rear vent"}},
 		{"planet fn", "planet_status(Mintoria) says held.", []string{"planet_status("}, []string{"says held"}},
+		{"list units", "Roster. list_units(automatons) Hulk.", []string{"list_units("}, []string{"Hulk"}},
+		{"get gear", "Boom. get_gear(Railcannon) fires.", []string{"get_gear("}, []string{"fires"}},
+		{"get place", "Cold. get_place(Tundra) ice.", []string{"get_place("}, []string{"ice"}},
 	}
 	for _, c := range cases {
 		got := Postprocess(c.in)

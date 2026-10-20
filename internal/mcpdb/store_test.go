@@ -1,13 +1,15 @@
 package mcpdb
 
 import (
+	"strings"
 	"testing"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
 // The router is gone by design (the model decides what to look up), so the
-// tests pin the two remaining contracts: the faction allowlist and ranking.
+// tests pin the two remaining contracts: the faction/category allowlists and
+// exact alias-resolved matching.
 func TestFactions(t *testing.T) {
 	for _, f := range []string{"automatons", "terminids", "illuminate"} {
 		if !Factions[f] {
@@ -21,21 +23,99 @@ func TestFactions(t *testing.T) {
 	}
 }
 
-func TestScore(t *testing.T) {
-	words := Keywords("how to kill hulk bruiser")
+func TestGearCategories(t *testing.T) {
+	for _, c := range []string{"weapons", "stratagems", "armor", "boosters"} {
+		if !GearCategories[c] {
+			t.Fatalf("%q must be a valid gear category", c)
+		}
+	}
+	for _, c := range []string{"gear", "units", ""} {
+		if GearCategories[c] {
+			t.Fatalf("%q must not be a valid gear category", c)
+		}
+	}
+}
+
+func TestFindExact(t *testing.T) {
 	hulk := bson.M{"name": "Hulk Bruiser", "aliases": bson.A{"hulk"},
 		"text_blob": "Hulk Bruiser | automatons | Massive walker"}
 	other := bson.M{"name": "Agitator", "aliases": bson.A{"radical"},
 		"text_blob": "Agitator | automatons | how to kill the radical"}
-	if Score("how to kill hulk bruiser", words, hulk) <= Score("how to kill hulk bruiser", words, other) {
-		t.Fatal("Hulk Bruiser must outrank Agitator")
+	docs := []bson.M{hulk, other}
+	for _, q := range []string{"Hulk Bruiser", "hulk", " HULK ", "Hulk bruiser"} {
+		got, ok := FindExact(docs, q)
+		if !ok || docName(got) != "Hulk Bruiser" {
+			t.Fatalf("FindExact(%q) must hit Hulk Bruiser, got %v ok=%v", q, got, ok)
+		}
 	}
-	// Missing text_blob must not panic (review #7.1).
-	bare := bson.M{"name": "Mystery"}
-	if s := Score("mystery", Keywords("mystery"), bare); s < 10 {
-		t.Fatalf("name hit bonus must apply without text_blob, got %v", s)
+	// Alias of another doc must not shadow the canonical hit.
+	if got, ok := FindExact(docs, "radical"); !ok || docName(got) != "Agitator" {
+		t.Fatalf("alias lookup must hit Agitator, got %v ok=%v", got, ok)
 	}
-	if got := Keywords("hulk hulk hulk"); len(got) != 1 {
-		t.Fatalf("keywords must dedupe, got %v", got)
+	// Substrings and noise words never match: exact tools do not rank.
+	for _, q := range []string{"", "hulk bruiser extra", "best loadout vs Automatons", "hulk bru"} {
+		if _, ok := FindExact(docs, q); ok {
+			t.Fatalf("FindExact(%q) must miss", q)
+		}
+	}
+	// Missing name falls back to "?" and never matches a real query.
+	bare := bson.M{"aliases": bson.A{"mystery"}}
+	if _, ok := FindExact([]bson.M{bare}, "mystery"); !ok {
+		t.Fatal("alias-only doc must match on its alias")
+	}
+	if _, ok := FindExact([]bson.M{bson.M{"name": "Mystery"}}, ""); ok {
+		t.Fatal("empty query must never match")
+	}
+}
+
+func TestFilterUnits(t *testing.T) {
+	docs := []bson.M{
+		{"name": "Hulk Bruiser", "faction": "automatons", "role": "Massive walker"},
+		{"name": "Trooper", "faction": "automatons", "role": "Basic infantry"},
+		{"name": "Charger", "faction": "terminids", "role": "Armored linebreaker"},
+	}
+	got := FilterUnits(docs, "automatons", "")
+	if len(got) != 2 {
+		t.Fatalf("faction filter must keep 2, got %v", got)
+	}
+	got = FilterUnits(docs, "AUTOMATONS", "walker")
+	if len(got) != 1 || docName(got[0]) != "Hulk Bruiser" {
+		t.Fatalf("role substring must narrow to Hulk, got %v", got)
+	}
+	if got := FilterUnits(docs, "bots", ""); len(got) != 0 {
+		t.Fatalf("unknown faction must yield no docs, got %v", got)
+	}
+}
+
+func TestFormatFull(t *testing.T) {
+	doc := bson.M{
+		"name": "Hulk Bruiser", "faction": "automatons", "role": "Massive walker",
+		"weak_points": bson.A{"Rear vent"}, "counters": bson.A{"AMR"},
+		"health": 1800, "size": "Massive", "source": "data/automatons.json",
+		"anatomy":     bson.A{bson.M{"part": "Vent", "av": "0", "fatal": "yes"}},
+		"wiki_tactics": []string{"Flank it"},
+	}
+	got := FormatFull(doc)
+	for _, want := range []string{"Hulk Bruiser", "Rear vent", "AMR", "health 1800", "Vent", "Flank it", "source:"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("FormatFull must carry %q, got %q", want, got)
+		}
+	}
+	// Gear-shaped docs render through the effect/procurement fallbacks.
+	gear := bson.M{"name": "Railcannon", "effect_text": "Big boom", "procurement": "Ship module"}
+	if got := FormatFull(gear); !strings.Contains(got, "Big boom") || !strings.Contains(got, "Ship module") {
+		t.Fatalf("gear fallbacks must render, got %q", got)
+	}
+}
+
+func TestClampLimit(t *testing.T) {
+	if got := clampLimit(0); got != defaultListLimit {
+		t.Fatalf("zero must default, got %d", got)
+	}
+	if got := clampLimit(999); got != maxListLimit {
+		t.Fatalf("overlarge must cap, got %d", got)
+	}
+	if got := clampLimit(5); got != 5 {
+		t.Fatalf("in-range must pass through, got %d", got)
 	}
 }
