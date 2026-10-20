@@ -15,11 +15,9 @@ author with `git commit --amend --author="vsreddyh <shouryanreddyh@gmail.com>"`.
 ## Toolchain
 
 - Go only (no Python runtime in production). Pin: `go 1.24` + `toolchain go1.25.14`.
-- Gate before every push: `gofmt -l`, `go vet ./...`, `go test ./...`,
-  `go build ./...` — run inside `docker.io/library/golang:1.25` via Podman
-  with `--network=host` (rootless Podman has no DNS otherwise) and the
-  module cache mounted at `/go/pkg/mod`.
-- CI (`.github/workflows/go.yml`) runs the same gate on every PR.
+- No local gate runs: never run `gofmt -l`, `go vet ./...`, `go test ./...`,
+  or `go build ./...` on the dev machine. Push the branch and rely on CI
+  (`.github/workflows/go.yml`), which runs the full gate on every PR.
 
 ## Containers
 

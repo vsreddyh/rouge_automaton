@@ -97,7 +97,7 @@ func Load() Config {
 		OpenCodeGoBaseURL:    getenv("OPENCODE_GO_BASE_URL", "https://opencode.ai/zen/go"),
 		RequireMention:       true,
 		AutoThread:           true,
-		HD2APIBase:           getenv("HD2_API_BASE", "https://api.helldivers2.dev/api/v1"),
+		HD2APIBase:           getenv("HD2_API_BASE", "https://helldiverstrainingmanual.com/api/v1"),
 		RateLimitPerMin:      getenvInt("RATE_LIMIT_PER_MIN", 10),
 		RateBurst:            getenvInt("RATE_BURST", 3),
 		XSuperClient:         getenv("X_SUPER_CLIENT", "rouge-automaton"),
