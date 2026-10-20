@@ -47,31 +47,43 @@ const (
 	maxListLimit     = 20  // roster ceiling: one world question's worth
 )
 
+// flat maps newlines to spaces so one doc always renders as one cited line:
+// a multiline wiki-crawled field must never forge a second line in context.
+func flat(s string) string {
+	s = strings.ReplaceAll(s, "\r", " ")
+	return strings.ReplaceAll(s, "\n", " ")
+}
+
 // strList reads a doc field that may be stored as a BSON array, a Go slice,
 // a generic decoded slice, or a lone string, always returning a slice. Docs
 // come from two writers (seed ingest and wiki crawl) with slightly different
 // shapes, so callers must not assume one representation.
 func strList(m bson.M, key string) []string {
 	var out []string
+	add := func(s string) {
+		if s != "" {
+			out = append(out, flat(s))
+		}
+	}
 	switch v := m[key].(type) {
 	case bson.A:
 		for _, e := range v {
 			if s, ok := e.(string); ok {
-				out = append(out, s)
+				add(s)
 			}
 		}
 	case []any:
 		for _, e := range v {
 			if s, ok := e.(string); ok {
-				out = append(out, s)
+				add(s)
 			}
 		}
 	case []string:
-		out = v
-	case string:
-		if v != "" {
-			out = append(out, v)
+		for _, s := range v {
+			add(s)
 		}
+	case string:
+		add(v)
 	}
 	return out
 }
@@ -80,7 +92,7 @@ func strList(m bson.M, key string) []string {
 // doc still renders a citable line instead of an empty bullet.
 func docName(m bson.M) string {
 	if s, ok := m["name"].(string); ok && s != "" {
-		return s
+		return flat(s)
 	}
 	return "?"
 }
@@ -223,7 +235,11 @@ func GetUnit(ctx context.Context, db *mongo.Database, name string) (bson.M, stri
 		return nil, "", false
 	}
 	for _, coll := range UnitCollections {
-		for _, d := range findAll(ctx, db, coll, bson.M{}, fetchCap) {
+		docs := findAll(ctx, db, coll, bson.M{}, fetchCap)
+		// Deterministic tie-break: a shared alias resolves to the
+		// alphabetically first doc, never Mongo natural order.
+		byName(docs)
+		for _, d := range docs {
 			if isExactMatch(d, name) {
 				return d, coll, true
 			}
@@ -259,7 +275,10 @@ func GetGear(ctx context.Context, db *mongo.Database, name string) (bson.M, stri
 		return nil, "", false
 	}
 	for _, coll := range GearCollections {
-		for _, d := range findAll(ctx, db, coll, bson.M{}, fetchCap) {
+		docs := findAll(ctx, db, coll, bson.M{}, fetchCap)
+		// Same deterministic tie-break as GetUnit.
+		byName(docs)
+		for _, d := range docs {
 			if isExactMatch(d, name) {
 				return d, coll, true
 			}
@@ -291,7 +310,10 @@ func GetPlace(ctx context.Context, db *mongo.Database, name string) (bson.M, str
 		return nil, "", false
 	}
 	for _, coll := range PlaceCollections {
-		for _, d := range findAll(ctx, db, coll, bson.M{}, fetchCap) {
+		docs := findAll(ctx, db, coll, bson.M{}, fetchCap)
+		// Same deterministic tie-break as GetUnit.
+		byName(docs)
+		for _, d := range docs {
 			if isExactMatch(d, name) {
 				return d, coll, true
 			}
@@ -300,9 +322,11 @@ func GetPlace(ctx context.Context, db *mongo.Database, name string) (bson.M, str
 	return nil, "", false
 }
 
-// cut truncates to n runes (multibyte-safe) so rich excerpts never split a
-// rune the model then echoes back as replacement characters.
+// cut truncates to n runes (multibyte-safe) and flattens newlines, so rich
+// excerpts never split a rune the model then echoes back as replacement
+// characters, nor forge a second cited line.
 func cut(s string, n int) string {
+	s = flat(s)
 	if r := []rune(s); len(r) > n {
 		return string(r[:n])
 	}
@@ -313,10 +337,10 @@ func cut(s string, n int) string {
 // source, then the mongo fallback so every line stays citable.
 func docSource(d bson.M) string {
 	if src, _ := d["source_url"].(string); src != "" {
-		return src
+		return flat(src)
 	}
 	if s, ok := d["source"].(string); ok && s != "" {
-		return s
+		return flat(s)
 	}
 	return "mongo"
 }
@@ -409,12 +433,13 @@ func FormatFull(d bson.M) string {
 	return line + " [source: " + src + "]"
 }
 
-// toString coerces a doc value to text: strings pass through, numerics and
-// bools render via fmt.Sprint, nil and other shapes read empty. Keeps rich
-// excerpts from silently dropping wiki-crawl numerics.
+// toString coerces a doc value to single-line text: strings pass through,
+// numerics and bools render via fmt.Sprint, nil and other shapes read empty.
+// Keeps rich excerpts from silently dropping wiki-crawl numerics or forging
+// extra lines from embedded newlines.
 func toString(v any) string {
 	if s, ok := v.(string); ok {
-		return s
+		return flat(s)
 	}
 	switch v.(type) {
 	case nil:

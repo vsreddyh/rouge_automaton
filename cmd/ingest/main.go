@@ -109,37 +109,48 @@ func run() error {
 		return err
 	}
 	coll := db.Collection("units")
-	// name -> aliases for coverage checks. Project only what covered()
-	// needs: pulling whole docs here would drag wiki_text/blob payloads
-	// for a membership test.
-	cur, err := coll.Find(ctx, bson.M{},
-		options.Find().SetProjection(bson.M{"name": 1, "aliases": 1}))
+	// name -> aliases per collection for coverage checks. Project only what
+	// covered() needs: pulling whole docs here would drag wiki_text/blob
+	// payloads for a membership test.
+	loadKnown := func(collName string) (map[string][]string, error) {
+		cur, err := db.Collection(collName).Find(ctx, bson.M{},
+			options.Find().SetProjection(bson.M{"name": 1, "aliases": 1}))
+		if err != nil {
+			return nil, err
+		}
+		defer cur.Close(ctx)
+		var found []bson.M
+		if err := cur.All(ctx, &found); err != nil {
+			return nil, err
+		}
+		known := map[string][]string{}
+		for _, d := range found {
+			if n, ok := d["name"].(string); ok {
+				var al []string
+				if a, ok := d["aliases"].(bson.A); ok {
+					for _, e := range a {
+						if s, ok := e.(string); ok {
+							al = append(al, strings.ToLower(s))
+						}
+					}
+				}
+				known[strings.ToLower(n)] = al
+			}
+		}
+		return known, nil
+	}
+	knownUnits, err := loadKnown("units")
 	if err != nil {
 		return err
 	}
-	defer cur.Close(ctx)
-	var found []bson.M
-	if err := cur.All(ctx, &found); err != nil {
+	knownStructures, err := loadKnown("structures")
+	if err != nil {
 		return err
 	}
-	known := map[string][]string{}
-	for _, d := range found {
-		if n, ok := d["name"].(string); ok {
-			var al []string
-			if a, ok := d["aliases"].(bson.A); ok {
-				for _, e := range a {
-					if s, ok := e.(string); ok {
-						al = append(al, strings.ToLower(s))
-					}
-				}
-			}
-			known[strings.ToLower(n)] = al
-		}
-	}
 	// covered reports whether a combined seed name (e.g. "Charger / Behemoth")
-	// is already represented by standalone docs, matched on exact /-tokens
-	// against known names and aliases.
-	covered := func(seed string) bool {
+	// is already represented by standalone docs in the same collection,
+	// matched on exact /-tokens against known names and aliases.
+	covered := func(known map[string][]string, seed string) bool {
 		toks := map[string]bool{}
 		for _, t := range strings.Split(strings.ToLower(seed), "/") {
 			if t = strings.TrimSpace(t); t != "" {
@@ -177,7 +188,7 @@ func run() error {
 			faction = strings.ToLower(strings.TrimSuffix(filepath.Base(f), ".json"))
 		}
 		for _, u := range d.Units {
-			if covered(u.Name) {
+			if covered(knownUnits, u.Name) {
 				continue
 			}
 			parts := append([]string{u.Name, faction}, u.Aliases...)
@@ -202,7 +213,7 @@ func run() error {
 				SetUpsert(true))
 		}
 		for _, s := range d.Structures {
-			if s.Name == "" || covered(s.Name) {
+			if s.Name == "" || covered(knownStructures, s.Name) {
 				continue
 			}
 			parts := append([]string{s.Name, faction}, s.Counters...)

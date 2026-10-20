@@ -115,6 +115,16 @@ func TestFormatFull(t *testing.T) {
 	if got := FormatFull(numAnatomy); !strings.Contains(got, "AV:0") || !strings.Contains(got, "fatal:1") {
 		t.Fatalf("numeric anatomy must coerce, got %q", got)
 	}
+	// Embedded newlines must never forge a second cited line (review r3).
+	multi := bson.M{"name": "Bog\nHulk", "role": "line1\nline2",
+		"weak_points": bson.A{"rear\nvent"}, "counters": bson.A{"amr"},
+		"source": "seed\nfile"}
+	if got := FormatFull(multi); strings.Contains(got, "\n") {
+		t.Fatalf("FormatFull must stay single-line, got %q", got)
+	}
+	if got := FormatContext([]bson.M{multi}); strings.Contains(got, "\n") {
+		t.Fatalf("FormatContext must stay one line per doc, got %q", got)
+	}
 }
 
 func TestClampLimit(t *testing.T) {
