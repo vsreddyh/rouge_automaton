@@ -108,7 +108,6 @@ func run() error {
 	if err := ensureIndexes(ctx, db); err != nil {
 		return err
 	}
-	coll := db.Collection("units")
 	// name -> aliases per collection for coverage checks. Project only what
 	// covered() needs: pulling whole docs here would drag wiki_text/blob
 	// payloads for a membership test.

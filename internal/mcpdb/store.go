@@ -6,10 +6,10 @@ package mcpdb
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"sort"
-	"strconv"
 	"strings"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -144,14 +144,12 @@ func FilterUnits(docs []bson.M, faction, role string) []bson.M {
 	role = normalize(role)
 	var out []bson.M
 	for _, d := range docs {
-		if f, _ := d["faction"].(string); normalize(f) != faction {
+		if normalize(toString(d["faction"])) != faction {
 			continue
 		}
 		if role != "" {
-			r, _ := d["role"].(string)
-			n, _ := d["note"].(string)
-			if !strings.Contains(strings.ToLower(r), role) &&
-				!strings.Contains(strings.ToLower(n), role) {
+			if !strings.Contains(strings.ToLower(toString(d["role"])), role) &&
+				!strings.Contains(strings.ToLower(toString(d["note"])), role) {
 				continue
 			}
 		}
@@ -160,13 +158,14 @@ func FilterUnits(docs []bson.M, faction, role string) []bson.M {
 	return out
 }
 
-// findAll loads up to limit docs from a collection, excluding any embedding
-// vector (payload weight with no retrieval value at query time). Any
-// failure yields nil — the caller degrades to fewer docs rather than an
-// error reply — with a debug log so silent Mongo outages stay visible in ops.
+// findAll loads up to limit docs from a collection, excluding the embedding
+// vector and the legacy text_blob (payload weight with no retrieval value
+// now that ranking is gone). Any failure yields nil — the caller degrades
+// to fewer docs rather than an error reply — with a debug log so silent
+// Mongo outages stay visible in ops.
 func findAll(ctx context.Context, db *mongo.Database, coll string, filter bson.M, limit int64) []bson.M {
 	cur, err := db.Collection(coll).Find(ctx, filter,
-		options.Find().SetLimit(limit).SetProjection(bson.M{"embedding": 0}))
+		options.Find().SetLimit(limit).SetProjection(bson.M{"embedding": 0, "text_blob": 0}))
 	if err != nil {
 		log.Printf("mcpdb: find %s: %v", coll, err)
 		return nil
@@ -236,8 +235,10 @@ func GetUnit(ctx context.Context, db *mongo.Database, name string) (bson.M, stri
 	}
 	for _, coll := range UnitCollections {
 		docs := findAll(ctx, db, coll, bson.M{}, fetchCap)
-		// Deterministic tie-break: a shared alias resolves to the
-		// alphabetically first doc, never Mongo natural order.
+		// Deterministic tie-break: each shelf scans in name order and
+		// shelves in UnitCollections order, so units win ties over
+		// structures. Deterministic is the contract; units-first is the
+		// documented precedence.
 		byName(docs)
 		for _, d := range docs {
 			if isExactMatch(d, name) {
@@ -276,7 +277,8 @@ func GetGear(ctx context.Context, db *mongo.Database, name string) (bson.M, stri
 	}
 	for _, coll := range GearCollections {
 		docs := findAll(ctx, db, coll, bson.M{}, fetchCap)
-		// Same deterministic tie-break as GetUnit.
+		// Same deterministic tie-break as GetUnit: name order within the
+		// shelf, shelves in GearCollections order.
 		byName(docs)
 		for _, d := range docs {
 			if isExactMatch(d, name) {
@@ -311,7 +313,8 @@ func GetPlace(ctx context.Context, db *mongo.Database, name string) (bson.M, str
 	}
 	for _, coll := range PlaceCollections {
 		docs := findAll(ctx, db, coll, bson.M{}, fetchCap)
-		// Same deterministic tie-break as GetUnit.
+		// Same deterministic tie-break as GetUnit: name order within the
+		// shelf, shelves in PlaceCollections order.
 		byName(docs)
 		for _, d := range docs {
 			if isExactMatch(d, name) {
@@ -447,54 +450,26 @@ func toString(v any) string {
 	case bool,
 		int, int8, int16, int32, int64,
 		uint, uint8, uint16, uint32, uint64,
-		float32, float64:
-		return fmt.Sprint(v)
+		float32, float64,
+		json.Number:
+		return flat(fmt.Sprint(v))
 	default:
 		return ""
 	}
 }
 
 // healthOf reads health stored as BSON numerics or a comma-grouped string.
+// Anything non-numeric (or zero) reads empty; bools never render as health.
 func healthOf(d bson.M) string {
-	switch v := d["health"].(type) {
-	case int:
-		if v > 0 {
-			return strconv.Itoa(v)
-		}
-	case int32:
-		if v > 0 {
-			return strconv.Itoa(int(v))
-		}
-	case int64:
-		if v > 0 {
-			return strconv.FormatInt(v, 10)
-		}
-	case uint:
-		if v > 0 {
-			return strconv.FormatUint(uint64(v), 10)
-		}
-	case uint32:
-		if v > 0 {
-			return strconv.FormatUint(uint64(v), 10)
-		}
-	case uint64:
-		if v > 0 {
-			return strconv.FormatUint(v, 10)
-		}
-	case float32:
-		if v > 0 {
-			return strconv.Itoa(int(v))
-		}
-	case float64:
-		if v > 0 {
-			return strconv.Itoa(int(v))
-		}
-	case string:
-		if v != "" {
-			return v
-		}
+	if _, ok := d["health"].(bool); ok {
+		return ""
 	}
-	return ""
+	switch h := toString(d["health"]); h {
+	case "", "0":
+		return ""
+	default:
+		return h
+	}
 }
 
 // anatomyRow reads one anatomy row stored as BSON or plain maps,
