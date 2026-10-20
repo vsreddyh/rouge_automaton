@@ -332,6 +332,9 @@ func num(m map[string]any, key string) float64 {
 		return float64(v)
 	case json.Number:
 		if f, err := v.Float64(); err == nil {
+			if math.IsNaN(f) || math.IsInf(f, 0) {
+				return 0
+			}
 			return f
 		}
 	case string:
