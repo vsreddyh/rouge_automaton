@@ -68,14 +68,14 @@ func strList(m bson.M, key string) []string {
 	switch v := m[key].(type) {
 	case bson.A:
 		for _, e := range v {
-			if s, ok := e.(string); ok {
-				add(s)
+			if s := toString(e); s != "" {
+				out = append(out, s)
 			}
 		}
 	case []any:
 		for _, e := range v {
-			if s, ok := e.(string); ok {
-				add(s)
+			if s := toString(e); s != "" {
+				out = append(out, s)
 			}
 		}
 	case []string:
@@ -175,6 +175,11 @@ func findAll(ctx context.Context, db *mongo.Database, coll string, filter bson.M
 	if err := cur.All(ctx, &docs); err != nil {
 		log.Printf("mcpdb: decode %s: %v", coll, err)
 		return nil
+	}
+	// Visible growth signal: an exact name past the cap silently misses, so
+	// a full page must surface in ops before it becomes a miss.
+	if int64(len(docs)) == limit {
+		log.Printf("mcpdb: %s hit fetch cap %d", coll, limit)
 	}
 	return docs
 }
@@ -578,7 +583,7 @@ func paramsSummary(d bson.M) string {
 	var pairs []string
 	for _, k := range keys {
 		if s := toString(m[k]); s != "" {
-			pairs = append(pairs, k+"="+cut(s, 80))
+			pairs = append(pairs, flat(k)+"="+cut(s, 80))
 			if len(pairs) >= 6 {
 				break
 			}

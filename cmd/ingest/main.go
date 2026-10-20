@@ -117,10 +117,14 @@ func run() error {
 		if err != nil {
 			return nil, err
 		}
-		defer cur.Close(ctx)
 		var found []bson.M
-		if err := cur.All(ctx, &found); err != nil {
-			return nil, err
+		allErr := cur.All(ctx, &found)
+		closeErr := cur.Close(ctx)
+		if allErr != nil {
+			return nil, allErr
+		}
+		if closeErr != nil {
+			return nil, closeErr
 		}
 		known := map[string][]string{}
 		for _, d := range found {
@@ -190,18 +194,15 @@ func run() error {
 			if covered(knownUnits, u.Name) {
 				continue
 			}
-			parts := append([]string{u.Name, faction}, u.Aliases...)
-			parts = append(parts, u.Role)
-			parts = append(parts, u.WeakPoints...)
-			parts = append(parts, u.Counters...)
 			seed := bson.M{
 				"faction": faction, "name": u.Name, "aliases": u.Aliases,
 				"role": u.Role, "weak_points": u.WeakPoints, "counters": u.Counters,
-				"text_blob":     strings.Join(parts, " | "),
 				"source":        "data/" + filepath.Base(f),
 				"source_url":    "",
 				"rev_id":        0,
 				"patch_version": "",
+				// No text_blob: the fuzzy ranker that read it is gone, and
+				// findAll excludes it — seeds carry only curated fields.
 				// No fetched_at: absent until the watcher writes a real
 				// timestamp. An explicit null would sit beside strings in
 				// the same field across docs.
@@ -215,16 +216,14 @@ func run() error {
 			if s.Name == "" || covered(knownStructures, s.Name) {
 				continue
 			}
-			parts := append([]string{s.Name, faction}, s.Counters...)
-			parts = append(parts, s.Note)
 			seed := bson.M{
 				"faction": faction, "name": s.Name, "counters": s.Counters,
 				"note": s.Note, "role": s.Note,
-				"text_blob":     strings.Join(parts, " | "),
 				"source":        "data/" + filepath.Base(f),
 				"source_url":    "",
 				"rev_id":        0,
 				"patch_version": "",
+				// No text_blob: see the units seed above.
 			}
 			structOps = append(structOps, mongo.NewUpdateOneModel().
 				SetFilter(bson.M{"faction": faction, "name": s.Name}).
@@ -236,9 +235,14 @@ func run() error {
 		fmt.Println("ingest: nothing to do")
 		return nil
 	}
+	// Fresh timeout for the write phase: the 60s ctx above already covered
+	// indexes plus coverage loads, and a growing seed set must not deadline
+	// the writes.
+	wctx, wcancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer wcancel()
 	var upserted, matched int64
 	if len(unitOps) > 0 {
-		res, err := db.Collection("units").BulkWrite(ctx, unitOps)
+		res, err := db.Collection("units").BulkWrite(wctx, unitOps)
 		if err != nil {
 			return err
 		}
@@ -246,7 +250,7 @@ func run() error {
 		matched += res.MatchedCount
 	}
 	if len(structOps) > 0 {
-		res, err := db.Collection("structures").BulkWrite(ctx, structOps)
+		res, err := db.Collection("structures").BulkWrite(wctx, structOps)
 		if err != nil {
 			return err
 		}

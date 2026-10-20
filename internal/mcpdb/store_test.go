@@ -115,6 +115,12 @@ func TestFormatFull(t *testing.T) {
 	if got := FormatFull(numAnatomy); !strings.Contains(got, "AV:0") || !strings.Contains(got, "fatal:1") {
 		t.Fatalf("numeric anatomy must coerce, got %q", got)
 	}
+	// Newline keys flatten too — a wiki infobox key must never forge a
+	// second cited line (review r4).
+	nlKey := bson.M{"name": "Mortar", "params": bson.M{"da\nmage": 120}}
+	if got := FormatFull(nlKey); strings.Contains(got, "\n") || !strings.Contains(got, "da mage=120") {
+		t.Fatalf("newline param keys must flatten, got %q", got)
+	}
 	// Embedded newlines must never forge a second cited line (review r3).
 	multi := bson.M{"name": "Bog\nHulk", "role": "line1\nline2",
 		"weak_points": bson.A{"rear\nvent"}, "counters": bson.A{"amr"},
