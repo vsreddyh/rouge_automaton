@@ -457,7 +457,7 @@ func TestOutputTokenCeiling(t *testing.T) {
 			}
 			_, _ = w.Write([]byte(`{"output":[{"type":"message","content":[{"type":"output_text","text":"Hi. Over."}]}]}`))
 		}))
-		defer srv.Close()
+		t.Cleanup(srv.Close)
 		c := &Client{BaseURL: srv.URL, HTTP: srv.Client()}
 		call(c)
 		if got := math.Float64frombits(seen.Load()); got != want {
@@ -472,4 +472,46 @@ func TestOutputTokenCeiling(t *testing.T) {
 			func(ctx context.Context, name, args string) string { return "" })
 	}, 4096)
 	check(t, "probe", func(c *Client) { c.Probe(context.Background()) }, 1)
+}
+
+// TestToolOutputCapped pins the input-growth bound: an overlong tool
+// result reaches the next round truncated with an explicit marker, so 10
+// rounds of wiki-size outputs cannot compound unbounded into the context.
+func TestToolOutputCapped(t *testing.T) {
+	if got := capToolOutput("wiki_search", "short"); got != "short" {
+		t.Fatalf("short output must pass through, got %q", got)
+	}
+	big := strings.Repeat("x", maxToolOutputRunes+100)
+	got := capToolOutput("wiki_search", big)
+	if strings.Contains(got, strings.Repeat("x", maxToolOutputRunes+100)) {
+		t.Fatal("overlong output must be truncated")
+	}
+	if !strings.Contains(got, "[tool output truncated]") {
+		t.Fatalf("truncation must be explicit, got tail %q", got[len(got)-30:])
+	}
+
+	// End to end: the function_call_output in round 2 carries the cap.
+	round := 0
+	var round2 string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		round++
+		if round == 1 {
+			w.Write([]byte(`{"output":[{"type":"function_call","call_id":"call_1","name":"wiki_search","arguments":"{}"}]}`))
+			return
+		}
+		raw, _ := io.ReadAll(r.Body)
+		round2 = string(raw)
+		w.Write([]byte(`{"output":[{"type":"message","content":[{"type":"output_text","text":"Done. Over."}]}]}`))
+	}))
+	defer srv.Close()
+	c := &Client{BaseURL: srv.URL, HTTP: srv.Client()}
+	c.ChatWithTools(context.Background(), "", "q?", nil, "s",
+		[]ToolDef{{Name: "wiki_search"}},
+		func(ctx context.Context, name, args string) string { return big })
+	if !strings.Contains(round2, "[tool output truncated]") {
+		t.Fatal("round 2 must carry the capped tool output")
+	}
+	if strings.Contains(round2, strings.Repeat("x", maxToolOutputRunes+100)) {
+		t.Fatal("round 2 must not carry the uncapped output")
+	}
 }

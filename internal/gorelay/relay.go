@@ -433,7 +433,7 @@ func (c *Client) ChatWithTools(ctx context.Context, system, query string, histor
 			input = append(input, json.RawMessage(call.Raw))
 			input = append(input, map[string]any{
 				"type":    "function_call_output",
-				"call_id": call.CallID, "output": out,
+				"call_id": call.CallID, "output": capToolOutput(call.Name, out),
 			})
 		}
 	}
@@ -443,6 +443,22 @@ func (c *Client) ChatWithTools(ctx context.Context, system, query string, histor
 	// stops being invisible in ops triage.
 	log.Printf("gorelay: tool loop exhausted session=%s query=%q", session, trunc(query, 120))
 	return Exhausted
+}
+
+// maxToolOutputRunes bounds one tool result appended to the model input.
+// Tool outputs ride every subsequent round, so at 10 rounds an uncapped
+// wiki fetch would compound into the context on every turn. The model
+// still sees the head of the result plus an explicit truncation marker —
+// never a silent cut.
+const maxToolOutputRunes = 2000
+
+// capToolOutput truncates overlong tool results to maxToolOutputRunes
+// (rune-safe). Short results pass through untouched.
+func capToolOutput(name, out string) string {
+	if r := []rune(out); len(r) > maxToolOutputRunes {
+		return string(r[:maxToolOutputRunes]) + "…[tool output truncated]"
+	}
+	return out
 }
 
 // isEmptyFirstRound reports whether res carries no answer and no tool call
