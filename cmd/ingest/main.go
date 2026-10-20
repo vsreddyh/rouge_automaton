@@ -148,7 +148,7 @@ func run() error {
 		}
 		var found []bson.M
 		allErr := cur.All(ctx, &found)
-		closeErr := cur.Close(ctx)
+		closeErr := cur.Close(context.WithoutCancel(ctx))
 		if allErr != nil {
 			return nil, allErr
 		}
@@ -191,6 +191,14 @@ func run() error {
 					for _, e := range d {
 						raw = append(raw, e.Value)
 					}
+				}
+			case bson.M:
+				for _, e := range a {
+					raw = append(raw, e)
+				}
+			case map[string]any:
+				for _, e := range a {
+					raw = append(raw, e)
 				}
 			}
 			var al []string

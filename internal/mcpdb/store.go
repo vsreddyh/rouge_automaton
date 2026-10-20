@@ -95,6 +95,15 @@ func strList(m bson.M, key string) []string {
 				add(ToString(e.Value))
 			}
 		}
+	case bson.M:
+		// A map-shaped field contributes its values.
+		for _, e := range v {
+			add(ToString(e))
+		}
+	case map[string]any:
+		for _, e := range v {
+			add(ToString(e))
+		}
 	case string:
 		add(v)
 	default:
@@ -390,7 +399,10 @@ func FormatContext(docs []bson.M) string {
 		if counters == "" {
 			counters = ToString(d["procurement"])
 		}
-		lines = append(lines, "- "+docName(d)+": weak "+weak+" | counter "+counters+" [source: "+src+"]")
+		// Roster lines ride 20-up in one tool result: cap both segments
+		// like FormatFull so one long wiki-crawled doc cannot blow the
+		// prompt budget for the whole page.
+		lines = append(lines, "- "+docName(d)+": weak "+cut(weak, 150)+" | counter "+cut(counters, 150)+" [source: "+src+"]")
 	}
 	return strings.Join(lines, "\n")
 }

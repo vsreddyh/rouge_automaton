@@ -72,6 +72,11 @@ func TestFindExact(t *testing.T) {
 	if _, ok := FindExact([]bson.M{arrDoc}, "hulk"); !ok {
 		t.Fatal("[]bson.D aliases must match")
 	}
+	// Map-shaped aliases contribute their values.
+	mapDoc := bson.M{"name": "Hulk", "aliases": bson.M{"x": "hulk"}}
+	if _, ok := FindExact([]bson.M{mapDoc}, "hulk"); !ok {
+		t.Fatal("bson.M aliases must match")
+	}
 	if _, ok := FindExact([]bson.M{bson.M{"name": "Mystery"}}, ""); ok {
 		t.Fatal("empty query must never match")
 	}
@@ -152,6 +157,13 @@ func TestFormatFull(t *testing.T) {
 	numSrc := bson.M{"name": "X", "source": 123}
 	if got := FormatFull(numSrc); !strings.Contains(got, "[source: 123]") {
 		t.Fatalf("numeric source must render, got %q", got)
+	}
+	// Roster lines cap both segments so one long doc cannot blow the page.
+	big := bson.M{"name": "X", "weak_points": bson.A{strings.Repeat("x", 500)},
+		"counters": bson.A{strings.Repeat("y", 500)}}
+	if got := FormatContext([]bson.M{big}); strings.Contains(got, strings.Repeat("x", 200)) ||
+		strings.Contains(got, strings.Repeat("y", 200)) {
+		t.Fatalf("roster lines must cap long fields, got len %d", len(got))
 	}
 	// Newline keys flatten too — a wiki infobox key must never forge a
 	// second cited line (review r4).
