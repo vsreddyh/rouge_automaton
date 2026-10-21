@@ -51,6 +51,13 @@ type Config struct {
 	// catalog is a different host with its own rules, so it gets its own
 	// knob; an empty value keeps the catalog package's default.
 	CatalogUserAgent string
+	// LocalBackdoorToken enables the loopback-only test door (POST
+	// /converse). Empty disables it. Kept in untracked .env, never
+	// logged or echoed.
+	LocalBackdoorToken string
+	// LocalBackdoorAddr is the loopback bind for the test door,
+	// default 127.0.0.1:8099. Any non-loopback value refuses to boot.
+	LocalBackdoorAddr string
 }
 
 // getenv returns the variable's value, defaulting only when it is unset.
@@ -116,6 +123,10 @@ func Load() Config {
 		// Empty means "use the catalog package's own default": the
 		// catalog host is not the wiki, and it has its own rules.
 		CatalogUserAgent: getenv("CATALOG_USER_AGENT", ""),
+		// Empty disables the door; a non-empty bearer enables a
+		// loopback-only listener (see internal/discord/backdoor.go).
+		LocalBackdoorToken: os.Getenv("LOCAL_BACKDOOR_TOKEN"),
+		LocalBackdoorAddr:  getenv("LOCAL_BACKDOOR_ADDR", "127.0.0.1:8099"),
 	}
 }
 

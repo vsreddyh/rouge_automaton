@@ -31,6 +31,16 @@ func run() error {
 	if strings.TrimSpace(cfg.DiscordBotToken) == "" || strings.TrimSpace(cfg.OpenCodeGoAPIKey) == "" {
 		return fmt.Errorf("DISCORD_BOT_TOKEN and OPENCODE_GO_API_KEY are required")
 	}
+	// Fail fast on a non-loopback test-door bind: refuse to boot before
+	// touching the network. An unset token means the door stays shut.
+	backdoorOn := strings.TrimSpace(cfg.LocalBackdoorToken) != ""
+	if backdoorOn {
+		if err := godiscord.ValidateBackdoorAddr(cfg.LocalBackdoorAddr); err != nil {
+			return err
+		}
+	} else {
+		log.Printf("rouge: local backdoor disabled (LOCAL_BACKDOOR_TOKEN unset)")
+	}
 	client, err := mongo.Connect(options.Client().ApplyURI(cfg.MongoURI))
 	if err != nil {
 		return fmt.Errorf("mongo: %w", err)
@@ -45,8 +55,18 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("discord: %w", err)
 	}
+	// The local test door never changes gateway behavior: with the token
+	// unset no listener starts (logged above); otherwise serve loopback in
+	// the background while the gateway blocks below.
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	if backdoorOn {
+		go func() {
+			if err := bot.StartBackdoor(ctx, cfg.LocalBackdoorAddr, cfg.LocalBackdoorToken); err != nil {
+				log.Printf("rouge: local backdoor: %v", err)
+			}
+		}()
+	}
 	if err := bot.Start(ctx); err != nil {
 		return fmt.Errorf("gateway: %w", err)
 	}
