@@ -51,7 +51,8 @@ func run() error {
 		return fmt.Errorf("mongo ping: %w", err)
 	}
 	db := client.Database(config.Config{MongoURI: *mongoURI}.DBName())
-	w := wikiwatch.New(db, wikifeed.New())
+	cfg := config.Load()
+	w := wikiwatch.New(db, wikifeed.NewWithUA(cfg.WikiUserAgent))
 	w.Days, w.Limit = *days, *limit
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

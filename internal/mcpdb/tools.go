@@ -61,9 +61,9 @@ type ToolBackend interface {
 }
 
 // NewExecutor wires an executor from a database handle and the bot config
-// (which carries the war-API credentials).
+// (which carries the war-API credentials and the wiki identity).
 func NewExecutor(db *mongo.Database, cfg config.Config) *Executor {
-	return &Executor{DB: db, Live: live.New(cfg), Wiki: wiki.New()}
+	return &Executor{DB: db, Live: live.New(cfg), Wiki: wiki.NewWithUA(cfg.WikiUserAgent)}
 }
 
 // ToolDefs returns the function specs sent to the model on every turn.

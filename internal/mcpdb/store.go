@@ -40,6 +40,11 @@ var GearCollections = []string{"weapons", "stratagems", "armor", "boosters"}
 // planet_status): biomes, planets, missions, difficulties and effects.
 var PlaceCollections = []string{"biomes", "planets", "missions", "difficulty", "effects"}
 
+// liveFilter hides content the catalog flags as not-yet-live (upcoming).
+// A public bot must not spoil an unreleased patch: the doc is recorded, but
+// it never reaches an answer.
+var liveFilter = bson.M{"upcoming": bson.M{"$ne": true}}
+
 // Retrieval budgets: exact tools still cap the Mongo scan per collection.
 // The cap must clear the largest seeded shelf (planets holds ~270 docs)
 // with headroom for growth, because a name past the cap misses silently.
@@ -343,8 +348,11 @@ func GetGear(ctx context.Context, db *mongo.Database, name string) (bson.M, stri
 	}
 	// Same deterministic tie-break as GetUnit: name order within the
 	// shelf, shelves in GearCollections order.
-	for i, docs := range fetchAll(ctx, db, GearCollections, bson.M{}, fetchCap) {
+	for i, docs := range fetchAll(ctx, db, GearCollections, liveFilter, fetchCap) {
 		for _, d := range docs {
+			if isUpcoming(d) {
+				continue
+			}
 			if isExactMatch(d, name) {
 				return d, GearCollections[i], true
 			}
@@ -361,9 +369,34 @@ func ListGear(ctx context.Context, db *mongo.Database, category string, limit, o
 	if !GearCategories[category] || db == nil {
 		return nil
 	}
-	docs := findAll(ctx, db, category, bson.M{}, fetchCap)
+	docs := findAll(ctx, db, category, liveFilter, fetchCap)
 	byName(docs)
-	return paginate(docs, limit, offset)
+	return paginate(liveDocs(docs), limit, offset)
+}
+
+// isUpcoming reports whether a doc is content the catalog flags as
+// not-yet-live. A public bot must not spoil an unreleased patch, so such a
+// doc is recorded but never answered.
+func isUpcoming(d bson.M) bool {
+	switch t := d["upcoming"].(type) {
+	case bool:
+		return t
+	case string:
+		return strings.EqualFold(strings.TrimSpace(t), "true")
+	}
+	return false
+}
+
+// liveDocs drops the not-yet-live docs from a shelf.
+func liveDocs(docs []bson.M) []bson.M {
+	out := make([]bson.M, 0, len(docs))
+	for _, d := range docs {
+		if isUpcoming(d) {
+			continue
+		}
+		out = append(out, d)
+	}
+	return out
 }
 
 // GetPlace fetches one static world doc (biome, planet, mission,

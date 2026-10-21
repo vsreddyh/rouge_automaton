@@ -6,6 +6,7 @@ package wikiwatch
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"sort"
 	"strings"
@@ -35,11 +36,30 @@ type Change struct {
 
 // Watcher diffs the wiki feed against Mongo and refreshes changed docs.
 type Watcher struct {
-	DB     *mongo.Database
-	Feed   *wikifeed.Client
-	Days   int
-	Limit  int
-	lastLM string
+	DB    *mongo.Database
+	Feed  *wikifeed.Client
+	Days  int
+	Limit int
+	// DiscoverLimit caps how many untracked feed entries one poll tries to
+	// place on a shelf. Each attempt costs one wiki request, and the wiki
+	// counts requests: a poll must not turn into a crawl.
+	DiscoverLimit int
+	// Backoff is how long the poller waits after the wiki says it is over
+	// the rate limit (a Retry-After from the wiki wins over this).
+	Backoff time.Duration
+	// CrawlDelay is the pause between two page fetches in a crawl.
+	CrawlDelay time.Duration
+	// CrawlLimit caps how many pages one crawl fetches (0 means no cap).
+	CrawlLimit int
+	// untracked holds the feed entries that are not tracked yet, waiting to
+	// be placed on a shelf.
+	untracked []string
+	// ignored holds the pages that matched no shelf. The feed keeps
+	// carrying them (they are recent changes), and re-checking them would
+	// spend a wiki request on every poll for nothing.
+	ignored      map[string]bool
+	ignoredOrder []string
+	lastLM       string
 }
 
 // New builds a watcher with sensible feed defaults.
@@ -47,7 +67,16 @@ func New(db *mongo.Database, feed *wikifeed.Client) *Watcher {
 	if feed == nil {
 		feed = wikifeed.New()
 	}
-	return &Watcher{DB: db, Feed: feed, Days: 1, Limit: 50}
+	return &Watcher{
+		DB:            db,
+		Feed:          feed,
+		Days:          1,
+		Limit:         50,
+		DiscoverLimit: 5,
+		Backoff:       30 * time.Minute,
+		CrawlDelay:    time.Second,
+		ignored:       map[string]bool{},
+	}
 }
 
 // Tracked returns the tracked_pages row for a title, if any.
@@ -91,6 +120,9 @@ func numInt(v any) int {
 
 // Poll fetches the feed and returns tracked pages whose revision changed.
 // A 304 Not Modified yields no changes.
+//
+// The feed also carries pages the watcher has never seen: they are not
+// changes yet, so they are held for the discovery pass (see Discover).
 func (w *Watcher) Poll(ctx context.Context) ([]Change, error) {
 	entries, lm, err := w.Feed.Feed(ctx, w.Days, w.Limit, w.lastLM)
 	if err != nil {
@@ -100,6 +132,8 @@ func (w *Watcher) Poll(ctx context.Context) ([]Change, error) {
 		w.lastLM = lm
 	}
 	var changes []Change
+	tracked := map[string]Tracked{}
+	var order []string
 	for _, e := range entries {
 		title := strings.TrimSpace(e.Title)
 		if title == "" || strings.Contains(title, ":") {
@@ -107,23 +141,94 @@ func (w *Watcher) Poll(ctx context.Context) ([]Change, error) {
 		}
 		tr, ok := w.Tracked(ctx, title)
 		if !ok {
+			// An article the watcher has never seen: it may be new
+			// content, and it is placed on a shelf by the discovery pass.
+			w.queue(title)
 			continue
 		}
-		canon, rev, err := w.Feed.Revision(ctx, title)
-		if err != nil || rev <= 0 {
+		if _, seen := tracked[title]; seen {
 			continue
+		}
+		tracked[title] = tr
+		order = append(order, title)
+	}
+	if len(order) == 0 {
+		return nil, nil
+	}
+	// One batched revision lookup for the whole feed: the wiki counts
+	// requests, and a poll must not spend one per entry.
+	revs, err := w.Feed.Revisions(ctx, order)
+	if err != nil {
+		return nil, err
+	}
+	for _, title := range order {
+		tr := tracked[title]
+		rev, ok := revs[title]
+		if !ok || rev.RevID <= 0 {
+			continue
+		}
+		canon := rev.Title
+		if canon == "" {
+			canon = title
 		}
 		if canon != tr.Title {
 			if alt, ok := w.Tracked(ctx, canon); ok {
 				tr = alt
 			}
 		}
-		if rev == tr.RevID {
+		if rev.RevID == tr.RevID {
 			continue
 		}
-		changes = append(changes, Change{Tracked: tr, Canonical: canon, NewRev: rev})
+		changes = append(changes, Change{Tracked: tr, Canonical: canon, NewRev: rev.RevID})
 	}
 	return changes, nil
+}
+
+// contains reports whether the slice holds the value.
+func contains(list []string, want string) bool {
+	for _, s := range list {
+		if s == want {
+			return true
+		}
+	}
+	return false
+}
+
+// maxUntracked bounds the discovery queue. The feed carries up to Limit
+// entries per poll and most of them are not shelf content; the queue must
+// not grow without end, and the oldest entry is the least likely to still
+// be new content.
+const maxUntracked = 100
+
+// maxIgnored bounds the set of pages that matched no shelf.
+const maxIgnored = 500
+
+// queue holds a page for the discovery pass.
+func (w *Watcher) queue(title string) {
+	if w.ignored[title] || contains(w.untracked, title) {
+		return
+	}
+	if len(w.untracked) >= maxUntracked {
+		w.untracked = w.untracked[1:]
+	}
+	w.untracked = append(w.untracked, title)
+}
+
+// ignore marks a page as belonging to no shelf, so the poller stops
+// spending requests on it.
+func (w *Watcher) ignore(title string) {
+	if w.ignored == nil {
+		w.ignored = map[string]bool{}
+	}
+	if w.ignored[title] {
+		return
+	}
+	w.ignored[title] = true
+	w.ignoredOrder = append(w.ignoredOrder, title)
+	for len(w.ignoredOrder) > maxIgnored {
+		delete(w.ignored, w.ignoredOrder[0])
+		w.ignoredOrder = w.ignoredOrder[1:]
+	}
 }
 
 // Refresh re-fetches one changed page and updates its doc in place. Curated
@@ -183,6 +288,9 @@ func (w *Watcher) buildFields(coll string, page wikifeed.Page, cur bson.M, sourc
 		"rev_id":     page.RevID,
 		"fetched_at": page.Timestamp,
 	}
+	if title := titleFromURL(sourceURL); title != "" {
+		set["wiki_title"] = title
+	}
 	switch coll {
 	case "units", "structures":
 		box := wikiparse.Infobox(page.Wikitext)
@@ -237,10 +345,77 @@ func (w *Watcher) buildFields(coll string, page wikifeed.Page, cur bson.M, sourc
 			params[k] = box[k]
 			vals = append(vals, box[k])
 		}
-		set["params"] = params
+		// The wiki infobox fills in a doc that has no curated params yet.
+		// A curated params bag (the seed's numbers) is never overwritten:
+		// the catalog and the wiki are both enrichment, not the seed.
+		if len(curParams(cur)) == 0 {
+			set["params"] = params
+		} else {
+			vals = curParams(cur)
+		}
 		set["text_blob"] = strings.Join([]string{nameOf(cur), strings.Join(vals, " "), cut(page.Extract, 1500)}, " | ")
 	}
 	return set
+}
+
+// curParams reads a doc's curated params bag in any writer shape.
+func curParams(cur bson.M) []string {
+	if cur == nil {
+		return nil
+	}
+	var bag map[string]any
+	switch t := cur["params"].(type) {
+	case bson.M:
+		bag = map[string]any(t)
+	case map[string]any:
+		bag = t
+	case bson.D:
+		bag = map[string]any{}
+		for _, e := range t {
+			bag[e.Key] = e.Value
+		}
+	default:
+		return nil
+	}
+	out := make([]string, 0, len(bag))
+	for k, v := range bag {
+		out = append(out, fmt.Sprintf("%s=%s", k, toText(v)))
+	}
+	sort.Strings(out)
+	return out
+}
+
+// toText renders a value as one line of text.
+func toText(v any) string {
+	switch t := v.(type) {
+	case string:
+		return t
+	case nil:
+		return ""
+	case bool:
+		return fmt.Sprint(t)
+	case float64:
+		return fmt.Sprintf("%g", t)
+	case int:
+		return fmt.Sprint(t)
+	case int32:
+		return fmt.Sprint(t)
+	case int64:
+		return fmt.Sprint(t)
+	}
+	return fmt.Sprint(v)
+}
+
+// titleFromURL reads the page title back out of a wiki URL.
+func titleFromURL(sourceURL string) string {
+	if sourceURL == "" {
+		return ""
+	}
+	idx := strings.LastIndex(sourceURL, "/wiki/")
+	if idx < 0 {
+		return ""
+	}
+	return strings.ReplaceAll(sourceURL[idx+len("/wiki/"):], "_", " ")
 }
 
 // cleanParams mirrors the Python crawler: drop image/caption noise and
@@ -260,15 +435,26 @@ func cleanParams(box map[string]string) map[string]string {
 	return out
 }
 
+// Shelves are the Mongo collections the intel store keeps. The watcher
+// tracks the wiki pages behind them.
+var Shelves = []string{
+	"units", "structures", "weapons", "stratagems", "armor", "boosters",
+	"biomes", "planets", "missions", "difficulty", "effects",
+}
+
 // Backfill populates tracked_pages from existing docs that carry a source_url,
 // so the very first poll can detect changes. Returns the number of rows seen.
+//
+// Only the crawled shelves are backfilled. The gear shelves come from the
+// catalog, which does not know a page's revision id: tracking them here
+// would make the next poll fetch every gear page at once — the burst that
+// gets a client rate limited. A gear page joins tracked_pages when the
+// watcher fetches it (one page at a time, at the rate the feed reports).
 func (w *Watcher) Backfill(ctx context.Context) (int, error) {
-	collections := []string{"units", "biomes", "structures", "boosters",
-		"missions", "weapons", "stratagems", "armor"}
 	seen := 0
-	for _, coll := range collections {
+	for _, coll := range CrawlShelves {
 		cur, err := w.DB.Collection(coll).Find(ctx, bson.M{},
-			options.Find().SetProjection(bson.M{"source_url": 1, "rev_id": 1, "name": 1}))
+			options.Find().SetProjection(bson.M{"source_url": 1, "rev_id": 1, "name": 1, "wiki_title": 1}))
 		if err != nil {
 			continue
 		}
@@ -281,7 +467,13 @@ func (w *Watcher) Backfill(ctx context.Context) (int, error) {
 			if !strings.Contains(url, "/wiki/") {
 				continue
 			}
-			title := strings.ReplaceAll(url[strings.LastIndex(url, "/wiki/")+len("/wiki/"):], "_", " ")
+			title := strings.TrimSpace(toString(doc["wiki_title"]))
+			if title == "" {
+				title = titleFromURL(url)
+			}
+			if title == "" {
+				continue
+			}
 			rev := numInt(doc["rev_id"])
 			res, err := w.DB.Collection("tracked_pages").UpdateOne(ctx,
 				bson.M{"title": title},
@@ -300,7 +492,8 @@ func (w *Watcher) Backfill(ctx context.Context) (int, error) {
 	return seen, nil
 }
 
-// RunOnce polls and refreshes every changed page. Returns the change count.
+// RunOnce polls and refreshes every changed page, then places any page the
+// feed carried that the watcher had never seen. Returns the change count.
 func (w *Watcher) RunOnce(ctx context.Context) (int, error) {
 	changes, err := w.Poll(ctx)
 	if err != nil {
@@ -312,26 +505,47 @@ func (w *Watcher) RunOnce(ctx context.Context) (int, error) {
 			log.Printf("watch: refresh %s: %v", ch.Tracked.Title, err)
 		}
 	}
+	if n, err := w.Discover(ctx); err != nil {
+		log.Printf("watch: discover: %v", err)
+	} else if n > 0 {
+		log.Printf("watch: placed %d new page(s)", n)
+	}
 	return len(changes), nil
 }
 
-// Run polls on an interval until ctx is cancelled.
+// Run polls on an interval until ctx is cancelled. A rate-limited wiki makes
+// the poller wait longer than its interval: hammering a wiki that just said
+// "slow down" is how a watcher gets shut out.
 func (w *Watcher) Run(ctx context.Context, interval time.Duration) {
 	if interval <= 0 {
 		interval = 5 * time.Minute
 	}
 	for {
-		if n, err := w.RunOnce(ctx); err != nil {
+		wait := interval
+		n, err := w.RunOnce(ctx)
+		switch {
+		case err != nil && wikifeed.IsRateLimit(err):
+			wait = wikifeed.RetryDelay(err, w.backoff())
+			log.Printf("watch: rate limited by the wiki, backing off for %s: %v", wait, err)
+		case err != nil:
 			log.Printf("watch: poll: %v", err)
-		} else if n > 0 {
+		case n > 0:
 			log.Printf("watch: refreshed %d page(s)", n)
 		}
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(interval):
+		case <-time.After(wait):
 		}
 	}
+}
+
+// backoff is the wait after a rate limit when the wiki gave no Retry-After.
+func (w *Watcher) backoff() time.Duration {
+	if w.Backoff > 0 {
+		return w.Backoff
+	}
+	return 30 * time.Minute
 }
 
 func nameOf(doc bson.M) string {

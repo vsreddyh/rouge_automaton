@@ -91,3 +91,97 @@ func TestCutRunes(t *testing.T) {
 		t.Fatalf("cut = %q", got)
 	}
 }
+
+// The wiki's own categories decide the shelf. The type category decides —
+// the generic "Weapons" category sits on primaries, secondaries,
+// throwables and the support-weapon stratagem, so it decides nothing.
+func TestShelfForCategories(t *testing.T) {
+	cases := []struct {
+		cats []string
+		want string
+	}{
+		{[]string{"Enemies", "Automatons", "Large Enemies"}, "units"},
+		{[]string{"Enemies", "Illuminate", "Small Enemies"}, "units"},
+		{[]string{"Armor", "Light Armor", "Helmets"}, "armor"},
+		{[]string{"Primary Weapons", "Assault Rifles"}, "weapons"},
+		{[]string{"Secondary Weapons", "Pistols"}, "weapons"},
+		{[]string{"Throwables", "Standard Throwables"}, "weapons"},
+		{[]string{"Stratagems", "Support Weapon Stratagems", "Support Weapons", "Weapons"}, "stratagems"},
+		{[]string{"Sentry Stratagems"}, "stratagems"},
+		{[]string{"Weapons"}, ""},
+		{[]string{"Guides", "Patch Notes"}, ""},
+		{[]string{"Biomes"}, "biomes"},
+		{[]string{"Planets"}, "planets"},
+		{[]string{"Structures", "Automatons"}, "structures"},
+	}
+	for _, tc := range cases {
+		if got := ShelfForCategories(tc.cats); got != tc.want {
+			t.Fatalf("ShelfForCategories(%v) = %q, want %q", tc.cats, got, tc.want)
+		}
+	}
+}
+
+func TestFactionOf(t *testing.T) {
+	if got := FactionOf([]string{"Enemies", "Terminids"}); got != "terminids" {
+		t.Fatalf("faction = %q", got)
+	}
+	if got := FactionOf([]string{"Enemies"}); got != "" {
+		t.Fatalf("faction = %q, want empty", got)
+	}
+}
+
+func TestTitleFromURL(t *testing.T) {
+	if got := titleFromURL("https://helldivers.wiki.gg/wiki/AR-11_Arbitrator"); got != "AR-11 Arbitrator" {
+		t.Fatalf("title = %q", got)
+	}
+	if got := titleFromURL(""); got != "" {
+		t.Fatalf("title = %q, want empty", got)
+	}
+}
+
+// The feed keeps carrying the pages that match no shelf; re-checking them
+// would spend a wiki request on every poll for nothing.
+func TestQueueRemembersIgnoredPages(t *testing.T) {
+	w := New(nil, nil)
+	w.queue("Patch Notes 1.1")
+	if len(w.untracked) != 1 {
+		t.Fatalf("queue = %v", w.untracked)
+	}
+	w.queue("Patch Notes 1.1")
+	if len(w.untracked) != 1 {
+		t.Fatalf("the same page must be queued once: %v", w.untracked)
+	}
+	w.ignore("Patch Notes 1.1")
+	w.untracked = nil
+	w.queue("Patch Notes 1.1")
+	if len(w.untracked) != 0 {
+		t.Fatalf("an ignored page must not be queued again: %v", w.untracked)
+	}
+}
+
+// A curated params bag is the seed's work: the wiki infobox must not
+// overwrite it when a page is refreshed.
+func TestBuildFieldsKeepsCuratedParams(t *testing.T) {
+	w := New(nil, nil)
+	cur := bson.M{"name": "AR-11 Arbitrator", "params": bson.M{"dps": "1,400 (4mm)600 (10g)"}}
+	page := wikifeed.Page{RevID: 9, Timestamp: "2026-10-01T00:00:00Z",
+		Wikitext: "{{Infobox Weapon\n| damage = 70\n| dps = 1,400\n}}"}
+	set := w.buildFields("weapons", page, cur, "https://helldivers.wiki.gg/wiki/AR-11_Arbitrator")
+	if _, ok := set["params"]; ok {
+		t.Fatalf("the wiki infobox must not overwrite the curated params: %v", set["params"])
+	}
+	if set["wiki_title"] != "AR-11 Arbitrator" {
+		t.Fatalf("wiki_title = %v", set["wiki_title"])
+	}
+}
+
+// A doc with no curated params yet takes the wiki's infobox.
+func TestBuildFieldsFillsEmptyParams(t *testing.T) {
+	w := New(nil, nil)
+	page := wikifeed.Page{RevID: 9, Wikitext: "{{Infobox Weapon\n| damage = 70\n}}"}
+	set := w.buildFields("weapons", page, bson.M{"name": "New Gun"}, "https://x/wiki/New_Gun")
+	params, ok := set["params"].(bson.M)
+	if !ok || params["damage"] != "70" {
+		t.Fatalf("params = %v", set["params"])
+	}
+}
