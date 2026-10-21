@@ -235,7 +235,7 @@ func (b *Bot) StartBackdoor(ctx context.Context, addr, token string) error {
 		return fmt.Errorf("local backdoor: listen: %w", err)
 	}
 	srv := &http.Server{
-		Handler:           b.converseHandler(token),
+		Handler:            b.converseHandler(token),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	go func() {
