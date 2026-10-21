@@ -75,6 +75,8 @@ func tokenize(q string) []string {
 	for _, f := range fields {
 		f = strings.Trim(f, ".,;:!?\"'()[]{}")
 		f = strings.ReplaceAll(f, "|", "")
+		// A typed apostrophe is an apostrophe.
+		f = strings.ReplaceAll(f, "’", "'")
 		// Contractions carry no page signal: "what's" is the question
 		// word "what", "don't" is noise.
 		if i := strings.Index(f, "'"); i >= 0 {
@@ -152,7 +154,9 @@ func shape(raw string) (titles, searches []string) {
 		return nil, nil
 	}
 	kw := contentKeywords(tokenize(raw))
-	titles = dedupe(ngrams(kw))
+	// Titles resolve case-insensitively, so two spellings of one name
+	// would spend two slots of the title batch.
+	titles = dedupeFold(ngrams(kw))
 	if len(titles) > maxTitleCandidates {
 		titles = titles[:maxTitleCandidates]
 	}
@@ -182,6 +186,23 @@ func dedupe(in []string) []string {
 			continue
 		}
 		seen[s] = true
+		out = append(out, s)
+	}
+	return out
+}
+
+// dedupeFold is dedupe with a case-insensitive key: MediaWiki resolves
+// titles that differ only in case, so keeping both would waste a slot
+// of the title batch.
+func dedupeFold(in []string) []string {
+	seen := make(map[string]bool, len(in))
+	out := make([]string, 0, len(in))
+	for _, s := range in {
+		key := strings.ToLower(s)
+		if s == "" || seen[key] {
+			continue
+		}
+		seen[key] = true
 		out = append(out, s)
 	}
 	return out

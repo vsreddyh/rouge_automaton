@@ -107,6 +107,14 @@ func (c *Client) get(ctx context.Context, params url.Values) (map[string]any, er
 	return out, nil
 }
 
+// lookupBudget caps one wiki lookup: the ladder makes several requests,
+// and a fallback must not outlast the turn that asked for it.
+const lookupBudget = 30 * time.Second
+
+// maxRedirectHops bounds the redirect chain walked when matching a
+// candidate title to its page.
+const maxRedirectHops = 5
+
 // Lookup resolves a natural-language query to one wiki page and returns
 // its summary. The query is shaped server-side (see query.go), so the
 // model can pass a plain question and still land on the right page.
@@ -120,6 +128,8 @@ func (c *Client) Lookup(ctx context.Context, query string) Result {
 	if q == "" {
 		return Result{Stage: StageSearchMiss}
 	}
+	ctx, cancel := context.WithTimeout(ctx, lookupBudget)
+	defer cancel()
 	titles, searches := shape(q)
 
 	stage := StageSearchMiss
@@ -142,8 +152,11 @@ func (c *Client) Lookup(ctx context.Context, query string) Result {
 	switch {
 	case err != nil:
 		// A failed title lookup is not fatal: the search path below
-		// may still answer.
+		// may still answer. The failure is recorded anyway — a lookup
+		// that could not run says "we don't know", not "the wiki has
+		// nothing".
 		log.Printf("wiki: title lookup failed query=%q: %v", q, err)
+		note(Result{Stage: StageFetchFail, Err: err})
 	case title != "":
 		res := c.summary(ctx, title)
 		if res.Stage == StageFound {
@@ -240,7 +253,13 @@ func (c *Client) resolveTitle(ctx context.Context, candidates []string) (string,
 	}
 	for _, cand := range candidates {
 		key := strings.ToLower(cand)
-		if to, ok := redirects[key]; ok {
+		// Redirect chains resolve one hop per link, so a candidate two
+		// hops from its page still has to be walked to the end.
+		for hop := 0; hop < maxRedirectHops; hop++ {
+			to, ok := redirects[key]
+			if !ok {
+				break
+			}
 			key = strings.ToLower(to)
 		}
 		if title, ok := present[key]; ok {
@@ -283,8 +302,19 @@ func (c *Client) summary(ctx context.Context, title string) Result {
 		Title: title,
 		Stage: StageFound,
 		Text: fmt.Sprintf("%s: %s [source: %s/wiki/%s]",
-			title, text, c.api(), url.PathEscape(strings.ReplaceAll(title, " ", "_"))),
+			title, text, c.api(), pagePath(title)),
 	}
+}
+
+// pagePath builds the wiki path for a title. MediaWiki reads "/" in a
+// title as a subpage separator, so the slashes stay and only the
+// segments are escaped.
+func pagePath(title string) string {
+	parts := strings.Split(title, "/")
+	for i, p := range parts {
+		parts[i] = url.PathEscape(strings.ReplaceAll(p, " ", "_"))
+	}
+	return strings.Join(parts, "/")
 }
 
 func firstSearchTitle(s map[string]any) string {

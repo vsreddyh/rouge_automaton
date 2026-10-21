@@ -114,6 +114,24 @@ func TestTokenize(t *testing.T) {
 	}
 }
 
+func TestTokenizeCurlyApostrophe(t *testing.T) {
+	got := tokenize("what’s the best loadout")
+	want := []string{"what", "the", "best", "loadout"}
+	if !equalStrings(got, want) {
+		t.Fatalf("tokens = %q, want %q", got, want)
+	}
+}
+
+func TestDedupeFold(t *testing.T) {
+	// Titles resolve case-insensitively, so both spellings must not
+	// spend two slots of the title batch.
+	got := dedupeFold([]string{"Automatons", "automatons", "Tundra", "tundra", "loadout"})
+	want := []string{"Automatons", "Tundra", "loadout"}
+	if !equalStrings(got, want) {
+		t.Fatalf("dedupeFold = %q, want %q", got, want)
+	}
+}
+
 func TestTokenizeKeepsDesignations(t *testing.T) {
 	got := tokenize("AR-23C Arc Cannon")
 	want := []string{"AR-23C", "Arc", "Cannon"}

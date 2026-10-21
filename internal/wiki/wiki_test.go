@@ -80,11 +80,16 @@ func (f fakeWiki) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		redirects := []any{}
 		for _, cand := range strings.Split(q.Get("titles"), "|") {
 			canon, found := f.page(cand)
-			if !found {
-				if to, isRedirect := f.redirect(cand); isRedirect {
-					redirects = append(redirects, map[string]any{"from": cand, "to": to})
-					canon, found = f.page(to)
+			title := cand
+			// Redirect chains: report every hop, the way the API does.
+			for hop := 0; hop < 5 && !found; hop++ {
+				to, isRedirect := f.redirect(title)
+				if !isRedirect {
+					break
 				}
+				redirects = append(redirects, map[string]any{"from": title, "to": to})
+				title = to
+				canon, found = f.page(title)
 			}
 			if !found {
 				pages = append(pages, map[string]any{"title": cand, "missing": true})
@@ -195,6 +200,28 @@ func TestLookupFollowsRedirect(t *testing.T) {
 	res := c.Lookup(context.Background(), "hulk")
 	if res.Stage != StageFound || res.Title != "Hulk (disambiguation)" {
 		t.Fatalf("res = %+v", res)
+	}
+}
+
+func TestLookupFollowsRedirectChain(t *testing.T) {
+	// A candidate two hops from its page still has to resolve.
+	c := serve(t, fakeWiki{
+		pages: map[string]string{"Hulk Bruiser": "Big walker. Rear vent."},
+		redirects: map[string]string{
+			"hulk":        "the bruiser",
+			"the bruiser": "Hulk Bruiser",
+		},
+	})
+	res := c.Lookup(context.Background(), "hulk")
+	if res.Stage != StageFound || res.Title != "Hulk Bruiser" {
+		t.Fatalf("res = %+v", res)
+	}
+}
+
+func TestPagePathKeepsSubpages(t *testing.T) {
+	// MediaWiki reads "/" as a subpage separator, so the slashes stay.
+	if got := pagePath("Blitz Search And Destroy/Automaton"); got != "Blitz_Search_And_Destroy/Automaton" {
+		t.Fatalf("pagePath = %q", got)
 	}
 }
 
