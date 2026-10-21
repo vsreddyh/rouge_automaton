@@ -120,6 +120,11 @@ func TestTokenizeCurlyApostrophe(t *testing.T) {
 	if !equalStrings(got, want) {
 		t.Fatalf("tokens = %q, want %q", got, want)
 	}
+	// A quoted word keeps its letters: the quotes are folded first and
+	// trimmed after.
+	if got := tokenize("’hello’"); !equalStrings(got, []string{"hello"}) {
+		t.Fatalf("tokens = %q, want [hello]", got)
+	}
 }
 
 func TestDedupeFold(t *testing.T) {

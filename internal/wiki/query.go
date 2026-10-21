@@ -73,10 +73,11 @@ func tokenize(q string) []string {
 	fields := strings.Fields(q)
 	out := make([]string, 0, len(fields))
 	for _, f := range fields {
+		// A typed apostrophe is an apostrophe, and it must be folded
+		// before the trim so a quoted word keeps its quotes trimmed.
+		f = strings.ReplaceAll(f, "’", "'")
 		f = strings.Trim(f, ".,;:!?\"'()[]{}")
 		f = strings.ReplaceAll(f, "|", "")
-		// A typed apostrophe is an apostrophe.
-		f = strings.ReplaceAll(f, "’", "'")
 		// Contractions carry no page signal: "what's" is the question
 		// word "what", "don't" is noise.
 		if i := strings.Index(f, "'"); i >= 0 {

@@ -26,9 +26,9 @@ type fakeWiki struct {
 // page finds the canonical title for a requested one, the way MediaWiki
 // normalizes titles: case-insensitive, underscores for spaces.
 func (f fakeWiki) page(title string) (string, bool) {
-	want := strings.ToLower(strings.ReplaceAll(title, "_", " "))
+	want := normTitle(title)
 	for name := range f.pages {
-		if strings.ToLower(name) == want {
+		if normTitle(name) == want {
 			return name, true
 		}
 	}
@@ -38,7 +38,7 @@ func (f fakeWiki) page(title string) (string, bool) {
 // redirect resolves a requested title to its redirect target.
 func (f fakeWiki) redirect(title string) (string, bool) {
 	for from, to := range f.redirects {
-		if strings.ToLower(from) == strings.ToLower(title) {
+		if normTitle(from) == normTitle(title) {
 			return to, true
 		}
 	}
@@ -222,6 +222,17 @@ func TestPagePathKeepsSubpages(t *testing.T) {
 	// MediaWiki reads "/" as a subpage separator, so the slashes stay.
 	if got := pagePath("Blitz Search And Destroy/Automaton"); got != "Blitz_Search_And_Destroy/Automaton" {
 		t.Fatalf("pagePath = %q", got)
+	}
+}
+
+func TestLookupMatchesUnderscoredTitle(t *testing.T) {
+	// MediaWiki matches a title whatever it spells its spaces with.
+	c := serve(t, fakeWiki{pages: map[string]string{
+		"Blitz_Search_And_Destroy/Automaton": "Automaton mission.",
+	}})
+	res := c.Lookup(context.Background(), "Blitz Search And Destroy/Automaton")
+	if res.Stage != StageFound || res.Title != "Blitz_Search_And_Destroy/Automaton" {
+		t.Fatalf("res = %+v", res)
 	}
 }
 

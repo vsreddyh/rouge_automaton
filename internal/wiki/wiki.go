@@ -235,7 +235,7 @@ func (c *Client) resolveTitle(ctx context.Context, candidates []string) (string,
 		}
 		title, _ := m["title"].(string)
 		if title != "" {
-			present[strings.ToLower(title)] = title
+			present[normTitle(title)] = title
 		}
 	}
 	redirects := map[string]string{}
@@ -248,11 +248,11 @@ func (c *Client) resolveTitle(ctx context.Context, candidates []string) (string,
 		from, _ := m["from"].(string)
 		to, _ := m["to"].(string)
 		if from != "" && to != "" {
-			redirects[strings.ToLower(from)] = to
+			redirects[normTitle(from)] = to
 		}
 	}
 	for _, cand := range candidates {
-		key := strings.ToLower(cand)
+		key := normTitle(cand)
 		// Redirect chains resolve one hop per link, so a candidate two
 		// hops from its page still has to be walked to the end.
 		for hop := 0; hop < maxRedirectHops; hop++ {
@@ -260,13 +260,19 @@ func (c *Client) resolveTitle(ctx context.Context, candidates []string) (string,
 			if !ok {
 				break
 			}
-			key = strings.ToLower(to)
+			key = normTitle(to)
 		}
 		if title, ok := present[key]; ok {
 			return title, nil
 		}
 	}
 	return "", nil
+}
+
+// normTitle normalizes a title for matching, the way MediaWiki does:
+// case-insensitive, with underscores standing for spaces.
+func normTitle(t string) string {
+	return strings.ToLower(strings.ReplaceAll(t, "_", " "))
 }
 
 // searchTitle returns the top search hit for a query, or "" when the
