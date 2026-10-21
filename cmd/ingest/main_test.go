@@ -113,13 +113,13 @@ func TestCovered(t *testing.T) {
 		want bool
 	}{
 		{"Charger / Behemoth", false}, // itself: re-upserted, never re-inserted
-		{"Tundra", false},              // itself
-		{"TUNDRA", false},              // itself, case-insensitively
-		{"Charger", true},              // alias of the combined doc
-		{"Behemoth", false},            // only the combined doc holds it
-		{"AR/GL-21 One-Two", false},    // itself: the slash is not a separator
-		{"Snow", true},                 // alias
-		{"Brand New Item", false},      // nothing known
+		{"Tundra", false},             // itself
+		{"TUNDRA", false},             // itself, case-insensitively
+		{"Charger", true},             // alias of the combined doc
+		{"Behemoth", false},           // only the combined doc holds it
+		{"AR/GL-21 One-Two", false},   // itself: the slash is not a separator
+		{"Snow", true},                // alias
+		{"Brand New Item", false},     // nothing known
 	}
 	for _, c := range cases {
 		if got := covered(known, c.seed); got != c.want {
