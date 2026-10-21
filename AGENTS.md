@@ -40,6 +40,18 @@ author with `git commit --amend --author="vsreddyh <shouryanreddyh@gmail.com>"`.
   `git merge-base --is-ancestor <parent> <child>` per layer and re-check
   every PR's mergeability, not just the tip.
 
+## Problem review bot
+
+- `.github/workflows/opencode-review.yml` submits an automated review
+  comment on every PR (`opened`, `synchronize`, `reopened`,
+  `ready_for_review`), typically within ~120s of push.
+- After pushing, wait for the bot review before considering the PR done:
+  `gh pr view <number> --comments`, `gh pr diff <number>`,
+  `gh run list --workflow opencode-review.yml`.
+- Address every bot finding (or reply why not), push fixes, and re-wait
+  for the next bot pass. Iterate until both the agent and the reviewer
+  (bot + human) are satisfied — no merge with open review threads.
+
 ## Agent skills
 
 ### Issue tracker
