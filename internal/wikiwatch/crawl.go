@@ -61,6 +61,10 @@ func (w *Watcher) Crawl(ctx context.Context) ([]CrawlResult, error) {
 			continue
 		}
 		for _, doc := range docs {
+			if err := ctx.Err(); err != nil {
+				results = append(results, res)
+				return results, err
+			}
 			if w.CrawlLimit > 0 && fetched >= w.CrawlLimit {
 				log.Printf("watch: crawl stopped at the %d page cap", w.CrawlLimit)
 				results = append(results, res)

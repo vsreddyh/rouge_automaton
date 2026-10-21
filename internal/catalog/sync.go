@@ -13,6 +13,11 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 )
 
+// ciCollation matches names the way the unique name indexes do:
+// case-insensitively, so a case-drifted name is the same doc and not a
+// second one.
+var ciCollation = &options.Collation{Locale: "en", Strength: 2}
+
 // Fetch records how one collection was read.
 type Fetch struct {
 	Collection string
@@ -434,7 +439,7 @@ func applyShelf(ctx context.Context, db *mongo.Database, shelf string, items []I
 			_, err := db.Collection(shelf).UpdateOne(ctx,
 				bson.M{"name": it.Name},
 				bson.M{"$set": seed},
-				options.UpdateOne().SetUpsert(true))
+				options.UpdateOne().SetUpsert(true).SetCollation(ciCollation))
 			if err != nil {
 				// One bad write must not cost the whole shelf.
 				st.failed++

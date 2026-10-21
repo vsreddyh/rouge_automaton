@@ -335,10 +335,19 @@ func (w *Watcher) Refresh(ctx context.Context, ch Change) error {
 		return err
 	}
 	_, err = w.DB.Collection("tracked_pages").UpdateOne(ctx,
-		bson.M{"title": ch.Tracked.Title},
+		bson.M{"title": title},
 		bson.M{"$set": bson.M{
 			"url": sourceURL, "collection": coll, "rev_id": page.RevID,
-		}})
+		}},
+		options.UpdateOne().SetUpsert(true))
+	if err != nil {
+		return err
+	}
+	if ch.Tracked.Title != "" && ch.Tracked.Title != title {
+		// The page was renamed: the old row would keep the diff alive.
+		_, err = w.DB.Collection("tracked_pages").DeleteOne(ctx,
+			bson.M{"title": ch.Tracked.Title})
+	}
 	return err
 }
 

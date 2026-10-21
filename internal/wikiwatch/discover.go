@@ -219,7 +219,7 @@ func (w *Watcher) store(ctx context.Context, shelf, title, faction string) (bool
 		canonical = title
 	}
 	sourceURL := w.sourceURL(canonical)
-	cur, err := w.findDoc(ctx, shelf, canonical)
+	cur, err := w.findDoc(ctx, shelf, canonical, sourceURL)
 	if err != nil {
 		return false, err
 	}
@@ -258,11 +258,24 @@ func (w *Watcher) store(ctx context.Context, shelf, title, faction string) (bool
 }
 
 // findDoc looks for a doc on a shelf by name (case-insensitively, the way
-// the unique name indexes compare) or by the wiki page it came from.
-func (w *Watcher) findDoc(ctx context.Context, shelf, title string) (bson.M, error) {
+// the unique name indexes compare) or by the wiki page it came from. The
+// URL lookup catches a renamed page: the page is the same, the title is
+// not.
+func (w *Watcher) findDoc(ctx context.Context, shelf, title, sourceURL string) (bson.M, error) {
+	coll := w.DB.Collection(shelf)
 	var doc bson.M
-	err := w.DB.Collection(shelf).FindOne(ctx, bson.M{"name": title},
+	err := coll.FindOne(ctx, bson.M{"name": title},
 		options.FindOne().SetCollation(ciCollation)).Decode(&doc)
+	if err == nil {
+		return doc, nil
+	}
+	if !errors.Is(err, mongo.ErrNoDocuments) {
+		return nil, err
+	}
+	if sourceURL == "" {
+		return nil, nil
+	}
+	err = coll.FindOne(ctx, bson.M{"source_url": sourceURL}).Decode(&doc)
 	if err == nil {
 		return doc, nil
 	}
