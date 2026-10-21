@@ -245,12 +245,12 @@ func (c *Client) Fetch(ctx context.Context, coll, etag string) (FetchResult, err
 		}
 		return FetchResult{ETag: newETag, NotModified: true}, nil
 	}
-	if resp.StatusCode != http.StatusOK {
-		return FetchResult{}, fmt.Errorf("catalog %s status %d%s", coll, resp.StatusCode, bodySnippet(body))
-	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes))
 	if err != nil {
 		return FetchResult{}, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return FetchResult{}, fmt.Errorf("catalog %s status %d%s", coll, resp.StatusCode, bodySnippet(body))
 	}
 	snap, err := Parse(body)
 	if err != nil {
