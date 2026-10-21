@@ -134,6 +134,20 @@ Wiki `robots.txt` allows reference/RAG use (`use=reference`); the poller identif
 
 Seeds are the floor, the crawl is the ceiling: `cmd/ingest` seeds every shelf with `$setOnInsert`, so a green-field Mongo answers exact gear and place lookups immediately, and a crawled doc only ever enriches the fields the seed left to it. Where the catalog and a curated seed disagree, the disagreement is reported (`catalog_mismatches`), never applied.
 
+## Licence
+
+- **Code**: GNU Affero General Public License v3.0 or later — see
+  `LICENSE`. Anyone who runs this bot as a network service must offer
+  their source.
+- **Data**: the seed intel under `skills/rouge-automaton/data/*.json`
+  is adapted from The Helldivers Wiki (helldivers.wiki.gg) and carries
+  **CC BY-NC-SA 4.0** — see `DATA-LICENSE`, `NOTICE`, and
+  `skills/rouge-automaton/data/README.md`. The bot is free and
+  non-commercial; monetising it needs the wiki's permission first.
+- **Answers cite their source**: every intel answer names the wiki
+  page (or live API) it came from, so the attribution reaches the
+  reader.
+
 ## Troubleshooting
 
 - `429` / rate limit → expected, wait for liberation ETA (uses `Retry-After` when present).

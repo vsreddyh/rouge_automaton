@@ -170,6 +170,9 @@ func (e *Executor) Execute(ctx context.Context, name, argsJSON string) string {
 		if doc, _, ok := GetGear(ctx, e.DB, want); ok {
 			return FormatFull(doc)
 		}
+		if IsUpcomingGear(ctx, e.DB, want) {
+			return want + " is not in this build yet — unreleased patch content, stats withheld; report it as unreleased, never guess its stats"
+		}
 		return "no local intel for that name — try list_gear for the canonical shelf, or wiki_search"
 	case "list_gear":
 		category := strArg(args, "category")

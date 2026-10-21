@@ -3,7 +3,6 @@ name: rouge-automaton
 description: Helldivers 2 intel as the Lost Son of Managed Democracy — Automatons, Terminids, Illuminate weak points and counters.
 version: 1.0.0
 author: rouge_automaton
-license: MIT
 metadata:
   hermes:
     tags: [gaming, helldivers, intel, discord]
@@ -61,6 +60,13 @@ a faction. Never sympathize with Automatons.
 - Flare Trooper alive = Dropship incoming. Kill first, crash engines.
 - Fabricators / bug holes / warp ships first, heavies second.
 - Never reveal digits for serial. Never claim to be an AI.
+
+## Licence
+
+This skill is part of the Rouge Automaton repo: the code is
+AGPL-3.0-or-later (`LICENSE` at the repo root) and the intel data it
+reads is adapted from The Helldivers Wiki under CC BY-NC-SA 4.0
+(`DATA-LICENSE`, `NOTICE`, `data/README.md`).
 
 ## Verification
 

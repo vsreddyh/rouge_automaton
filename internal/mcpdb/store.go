@@ -399,6 +399,24 @@ func liveDocs(docs []bson.M) []bson.M {
 	return out
 }
 
+// IsUpcomingGear reports whether name exactly matches a gear doc the
+// catalog flags as not-yet-live. GetGear hides such docs, so a miss
+// alone cannot tell "unreleased" from "unknown" — this names the miss
+// so the answer can say "not in this build yet" instead of guessing.
+func IsUpcomingGear(ctx context.Context, db *mongo.Database, name string) bool {
+	if normalize(name) == "" || db == nil {
+		return false
+	}
+	for _, docs := range fetchAll(ctx, db, GearCollections, bson.M{}, fetchCap) {
+		for _, d := range docs {
+			if isUpcoming(d) && isExactMatch(d, name) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // GetPlace fetches one static world doc (biome, planet, mission,
 // difficulty, effect) by exact name or alias. Live ownership stays on
 // planet_status — this is the static intel shelf. Returns the doc, the
