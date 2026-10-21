@@ -135,7 +135,7 @@ func TestBackdoorAuth(t *testing.T) {
 		t.Fatalf("GET must be 405, got %d", recGet.Code)
 	}
 
-	rec := postConverse(t, h, token, map[string]string{"text": "hi", "user": "u1"})
+	rec = postConverse(t, h, token, map[string]string{"text": "hi", "user": "u1"})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("authed call must be 200, got %d: %s", rec.Code, rec.Body.String())
 	}
