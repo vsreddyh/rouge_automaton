@@ -323,11 +323,11 @@ func run(mongoURI, dataDir string) error {
 	}
 	knownUnits, err := loadKnown("units")
 	if err != nil {
-		return err
+		return fmt.Errorf("load known units: %w", err)
 	}
 	knownStructures, err := loadKnown("structures")
 	if err != nil {
-		return err
+		return fmt.Errorf("load known structures: %w", err)
 	}
 	// Gear and world shelves need the same per-collection coverage map:
 	// a seed whose name is already in the collection (or is a combined
@@ -342,7 +342,7 @@ func run(mongoURI, dataDir string) error {
 	for _, coll := range docCollections {
 		k, err := loadKnown(coll)
 		if err != nil {
-			return err
+			return fmt.Errorf("load known %s: %w", coll, err)
 		}
 		knownDocs[coll] = k
 	}

@@ -193,7 +193,11 @@ func TestSeedFiles(t *testing.T) {
 	if err != nil || len(files) == 0 {
 		t.Fatalf("no seed files in %s: %v", dir, err)
 	}
+	// Names and aliases per collection across every file: a shelf can
+	// span files, so uniqueness is a collection-wide property.
 	shelvesSeen := map[string]bool{}
+	names := map[string]map[string]string{}
+	aliases := map[string]map[string]string{}
 	for _, f := range files {
 		raw, err := os.ReadFile(f)
 		if err != nil {
@@ -208,30 +212,42 @@ func TestSeedFiles(t *testing.T) {
 				continue
 			}
 			shelvesSeen[coll] = true
-			names := map[string]string{}
+			if names[coll] == nil {
+				names[coll] = map[string]string{}
+			}
+			if aliases[coll] == nil {
+				aliases[coll] = map[string]string{}
+			}
 			for _, doc := range docs {
 				if doc.Name == "" {
 					t.Errorf("%s: %s has a doc with no name", f, coll)
 					continue
 				}
 				key := strings.ToLower(doc.Name)
-				if prev, dup := names[key]; dup {
+				if prev, dup := names[coll][key]; dup {
 					t.Errorf("%s: %s has duplicate names %q and %q", f, coll, prev, doc.Name)
 				}
-				names[key] = doc.Name
-			}
-			for _, doc := range docs {
+				names[coll][key] = doc.Name
 				for _, a := range doc.Aliases {
 					al := strings.ToLower(strings.TrimSpace(a))
 					if al == "" {
 						t.Errorf("%s: %s doc %q has an empty alias", f, coll, doc.Name)
 						continue
 					}
-					if other, clash := names[al]; clash {
-						t.Errorf("%s: %s doc %q aliases %q, which is doc %q",
-							f, coll, doc.Name, a, other)
+					if prev, dup := aliases[coll][al]; dup && prev != doc.Name {
+						t.Errorf("%s: %s docs %q and %q both alias %q", f, coll, prev, doc.Name, a)
 					}
+					aliases[coll][al] = doc.Name
 				}
+			}
+		}
+	}
+	// An alias that shadows another doc's name wins the exact lookup and
+	// makes covered() skip that doc forever.
+	for coll, byName := range names {
+		for al, owner := range aliases[coll] {
+			if other, clash := byName[al]; clash && other != owner {
+				t.Errorf("%s: doc %q aliases %q, which is doc %q", coll, owner, al, other)
 			}
 		}
 	}
