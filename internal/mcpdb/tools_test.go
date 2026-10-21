@@ -189,12 +189,12 @@ func wikiServer(t *testing.T, mode string) *httptest.Server {
 			w.WriteHeader(500)
 		case "hit":
 			if r.URL.Query().Get("prop") == "extracts" {
-				w.Write([]byte(`{"query":{"pages":[{"title":"Automatons","extract":"Faction of robots."}]}}`))
+				_, _ = w.Write([]byte(`{"query":{"pages":[{"title":"Automatons","extract":"Faction of robots."}]}}`))
 				return
 			}
-			w.Write([]byte(`{"query":{"pages":[{"title":"Automatons"}]}}`))
+			_, _ = w.Write([]byte(`{"query":{"pages":[{"title":"Automatons"}]}}`))
 		default:
-			w.Write([]byte(`{"query":{"pages":[{"title":"nope","missing":true}]}}`))
+			_, _ = w.Write([]byte(`{"query":{"pages":[{"title":"nope","missing":true}]}}`))
 		}
 	}))
 	t.Cleanup(srv.Close)

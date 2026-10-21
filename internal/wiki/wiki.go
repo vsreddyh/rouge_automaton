@@ -96,7 +96,8 @@ func (c *Client) get(ctx context.Context, params url.Values) (map[string]any, er
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", "rouge-automaton (+admin@example.com)")
+	// MediaWiki asks every client to identify itself with a contact.
+	req.Header.Set("User-Agent", "rouge-automaton (+https://github.com/vsreddyh/rouge_automaton)")
 	resp, err := c.http().Do(req)
 	if err != nil {
 		return nil, err

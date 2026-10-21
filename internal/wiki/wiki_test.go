@@ -46,6 +46,11 @@ func (f fakeWiki) redirect(title string) (string, bool) {
 }
 
 func (f fakeWiki) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if ua := r.Header.Get("User-Agent"); !strings.Contains(ua, "rouge-automaton") {
+		// MediaWiki asks every client to identify itself.
+		http.Error(w, "bad user agent", 400)
+		return
+	}
 	if f.status != 0 {
 		w.WriteHeader(f.status)
 		return
@@ -111,7 +116,7 @@ func writeJSON(w http.ResponseWriter, body map[string]any) {
 		w.WriteHeader(500)
 		return
 	}
-	w.Write(raw)
+	_, _ = w.Write(raw)
 }
 
 // serve starts a fake wiki and returns a client pointed at it.
