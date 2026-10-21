@@ -302,7 +302,7 @@ func TestBackdoorHistorySanitized(t *testing.T) {
 	// Tail cap: 30 turns keep the last 20.
 	big := make([]gorelay.Message, 30)
 	for i := range big {
-		big[i] = gorelay.Message{Role: "user", Content: string(rune('a' + i%26)) + " turn"}
+		big[i] = gorelay.Message{Role: "user", Content: string(rune('a'+i%26)) + " turn"}
 	}
 	capped := sanitizeHistory(big)
 	if len(capped) != 20 || capped[0].Content != big[10].Content {
