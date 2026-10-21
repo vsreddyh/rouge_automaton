@@ -91,10 +91,12 @@ func FactionOf(cats []string) string {
 // the next edit to it refreshes through the normal path.
 //
 // A page that matches no shelf (a guide, a patch note) is ignored, not
-// filed. Returns the number of pages placed.
-func (w *Watcher) Discover(ctx context.Context) (int, error) {
+// filed. A page that could not be placed (the store or the wiki answered
+// with an error) goes back on the queue for the next poll. Returns the
+// number of pages placed.
+func (w *Watcher) Discover(ctx context.Context) int {
 	if len(w.untracked) == 0 {
-		return 0, nil
+		return 0
 	}
 	titles := w.untracked
 	w.untracked = nil
@@ -130,7 +132,7 @@ func (w *Watcher) Discover(ctx context.Context) (int, error) {
 		// The page matched no shelf: stop spending requests on it.
 		w.ignore(title)
 	}
-	return placed, nil
+	return placed
 }
 
 // requeue puts the pages the discovery pass did not reach back on the

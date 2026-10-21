@@ -249,6 +249,9 @@ func (c *Client) Fetch(ctx context.Context, coll, etag string) (FetchResult, err
 	if err != nil {
 		return FetchResult{}, err
 	}
+	if len(body) >= maxBodyBytes {
+		return FetchResult{}, fmt.Errorf("catalog %s: payload is over the %d byte cap", coll, maxBodyBytes)
+	}
 	if resp.StatusCode != http.StatusOK {
 		return FetchResult{}, fmt.Errorf("catalog %s status %d%s", coll, resp.StatusCode, bodySnippet(body))
 	}

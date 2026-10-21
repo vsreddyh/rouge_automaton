@@ -199,7 +199,11 @@ func (w *Watcher) Poll(ctx context.Context) ([]Change, error) {
 			canon = title
 		}
 		if canon != tr.Title {
-			if alt, ok, err := w.Tracked(ctx, canon); err == nil && ok {
+			alt, ok, err := w.Tracked(ctx, canon)
+			if err != nil {
+				return nil, err
+			}
+			if ok {
 				tr = alt
 			}
 		}
@@ -605,9 +609,7 @@ func (w *Watcher) RunOnce(ctx context.Context) (int, error) {
 			log.Printf("watch: refresh %s: %v", ch.Tracked.Title, err)
 		}
 	}
-	if n, err := w.Discover(ctx); err != nil {
-		log.Printf("watch: discover: %v", err)
-	} else if n > 0 {
+	if n := w.Discover(ctx); n > 0 {
 		log.Printf("watch: placed %d new page(s)", n)
 	}
 	// The poll is done: the feed validator can move on.
