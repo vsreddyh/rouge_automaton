@@ -245,11 +245,13 @@ func (c *Client) Fetch(ctx context.Context, coll, etag string) (FetchResult, err
 		}
 		return FetchResult{ETag: newETag, NotModified: true}, nil
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes))
+	// Read one byte past the cap: a payload that is exactly at the cap
+	// is fine, one that is longer is truncated and must be reported.
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes+1))
 	if err != nil {
 		return FetchResult{}, err
 	}
-	if len(body) >= maxBodyBytes {
+	if len(body) > maxBodyBytes {
 		return FetchResult{}, fmt.Errorf("catalog %s: payload is over the %d byte cap", coll, maxBodyBytes)
 	}
 	if resp.StatusCode != http.StatusOK {
