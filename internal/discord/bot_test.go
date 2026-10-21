@@ -61,6 +61,15 @@ func TestCutRunes(t *testing.T) {
 	}
 }
 
+// tail returns the last n bytes of s for failure messages, guarding
+// against short strings so a future case never panics on the slice.
+func tail(s string, n int) string {
+	if len(s) > n {
+		return s[len(s)-n:]
+	}
+	return s
+}
+
 // boundModelReply must cap long model output at 1900 runes on a line
 // boundary with an in-voice trailer, and pass short replies through
 // untouched so the 100-rune path stays byte-identical to cutRunes+Postprocess.
@@ -81,7 +90,7 @@ func TestBoundModelReply(t *testing.T) {
 	longLine := strings.Repeat("c", modelReplyBudget+100)
 	got := boundModelReply(longLine)
 	if !strings.HasSuffix(got, truncationTrailer) {
-		t.Fatalf("truncated reply must end with trailer: %q", got[len(got)-60:])
+		t.Fatalf("truncated reply must end with trailer: %q", tail(got, 60))
 	}
 	head := strings.TrimSuffix(got, "\n\n"+truncationTrailer)
 	if utf8.RuneCountInString(head) != modelReplyBudget {
@@ -117,7 +126,7 @@ func TestBoundModelReply(t *testing.T) {
 		t.Fatalf("final reply exceeds Discord ceiling: %d runes", utf8.RuneCountInString(final))
 	}
 	if !strings.Contains(final, truncationTrailer) || !strings.HasSuffix(final, "Over.") {
-		t.Fatalf("final reply must end with trailer + sign-off: %q", final[len(final)-80:])
+		t.Fatalf("final reply must end with trailer + sign-off: %q", tail(final, 80))
 	}
 	// 100-rune parity with the old cut-then-postprocess path.
 	short := strings.Repeat("z", 100)
