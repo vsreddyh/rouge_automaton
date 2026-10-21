@@ -87,6 +87,19 @@ func TestExecuteUnknownAndBadArgs(t *testing.T) {
 	}
 }
 
+// TestToolGuidanceUnreleasedRefusal pins issue #71: the procedure must
+// teach the unreleased-gear refusal in Helldiver voice, positively, so
+// the model paraphrases the requisition refusal instead of echoing
+// software words. Positive pins only — no denial list.
+func TestToolGuidanceUnreleasedRefusal(t *testing.T) {
+	low := strings.ToLower(ToolGuidance)
+	for _, want := range []string{"hasn't cleared requisition", "unreleased ordnance", "never guess"} {
+		if !strings.Contains(low, want) {
+			t.Fatalf("guidance must carry %q", want)
+		}
+	}
+}
+
 // TestToolGuidanceRosterCarveOut pins issue #53: list tools are rosters, so
 // the procedure must not demand weak point + counter on every intel answer.
 func TestToolGuidanceRosterCarveOut(t *testing.T) {

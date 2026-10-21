@@ -25,4 +25,4 @@ What this means when you copy this directory on its own:
 Unreleased patch content: the gear catalog flags items that are not
 live yet with `upcoming: true`. Such items are stored (so the bot
 knows they exist) but **never rendered into an answer** — a lookup
-replies that the item is not in this build yet, without its stats.
+replies that the item hasn't cleared requisition yet, without its details.
