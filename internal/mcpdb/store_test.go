@@ -226,11 +226,12 @@ func TestFormatUnitRoster(t *testing.T) {
 			t.Fatalf("roster must not volunteer %q, got %q", banned, got)
 		}
 	}
-	// A structure seeded before #53 copied note into role; that note is a
-	// tactic (a counter), so the roster drops it and keeps the name.
+	// A structure seeded before #53 copied note into role (possibly with
+	// whitespace drift); that note is a tactic (a counter), so the roster
+	// drops it and keeps the name.
 	structure := bson.M{
 		"name": "Fabricator", "note": "Destroy early, don't waste heavies.",
-		"role": "Destroy early, don't waste heavies.", "counters": bson.A{"Grenade"},
+		"role": "Destroy early, don't waste heavies. ", "counters": bson.A{"Grenade"},
 		"source": "data/automatons.json",
 	}
 	got = FormatUnitRoster([]bson.M{structure})

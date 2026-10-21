@@ -311,6 +311,25 @@ func run(mongoURI, dataDir string) error {
 	if err := ensureIndexes(ctx, db); err != nil {
 		return err
 	}
+	// Migration (#53): pre-fix structure seeds copied note into role, which
+	// put tactical advice on roster lines. Clear only that copy — never a
+	// curated role — so an already-seeded database heals on the next ingest
+	// run. The store also drops a note-matched role at read time, so this is
+	// cleanup, not the correctness boundary.
+	cleared, err := db.Collection("structures").UpdateMany(ctx,
+		bson.M{
+			"role":  bson.M{"$exists": true},
+			"note":  bson.M{"$exists": true},
+			"$expr": bson.M{"$eq": []string{"$role", "$note"}},
+		},
+		bson.M{"$unset": bson.M{"role": ""}},
+	)
+	if err != nil {
+		return fmt.Errorf("clear structure role copies: %w", err)
+	}
+	if cleared.ModifiedCount > 0 {
+		fmt.Printf("ingest: cleared %d structure role copies\n", cleared.ModifiedCount)
+	}
 	// name -> aliases per collection for coverage checks. Project only what
 	// covered() needs: pulling whole docs here would drag wiki_text/blob
 	// payloads for a membership test.

@@ -455,15 +455,16 @@ func formatRoster(docs []bson.M, descriptor func(bson.M) string) string {
 	return strings.Join(lines, "\n")
 }
 
-// rosterRole returns the role a unit roster line may carry. A role that is
-// byte-identical to note is the pre-#53 structure seed copy, not curated
-// role text; a roster must not surface it.
+// rosterRole returns the role a unit roster line may carry. A role that
+// folds to note is the pre-#53 structure seed copy, not curated role text;
+// a roster must not surface it. Fold rather than compare bytes so a stray
+// space or case drift cannot re-leak the copy.
 func rosterRole(d bson.M) string {
 	role := ToString(d["role"])
 	if role == "" {
 		return ""
 	}
-	if note := ToString(d["note"]); note != "" && note == role {
+	if note := ToString(d["note"]); note != "" && normalize(role) == normalize(note) {
 		return ""
 	}
 	return role
