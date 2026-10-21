@@ -33,8 +33,11 @@ func run() error {
 	}
 	// Fail fast on a non-loopback test-door bind: refuse to boot before
 	// touching the network. An unset token means the door stays shut.
-	backdoorOn := strings.TrimSpace(cfg.LocalBackdoorToken) != ""
-	if backdoorOn {
+	// The token is trimmed once here so the enable check and the bearer
+	// compare below can never disagree (" secret " must not enable an
+	// unauthenticatable door).
+	backdoorToken := strings.TrimSpace(cfg.LocalBackdoorToken)
+	if backdoorToken != "" {
 		if err := godiscord.ValidateBackdoorAddr(cfg.LocalBackdoorAddr); err != nil {
 			return err
 		}
@@ -60,10 +63,10 @@ func run() error {
 	// the background while the gateway blocks below.
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	if backdoorOn {
+	if backdoorToken != "" {
 		go func() {
-			if err := bot.StartBackdoor(ctx, cfg.LocalBackdoorAddr, cfg.LocalBackdoorToken); err != nil {
-				log.Printf("rouge: local backdoor: %v", err)
+			if err := bot.StartBackdoor(ctx, cfg.LocalBackdoorAddr, backdoorToken); err != nil {
+				log.Printf("rouge: LOCAL BACKDOOR FAILED, gateway continuing: %v", err)
 			}
 		}()
 	}

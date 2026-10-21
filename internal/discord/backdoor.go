@@ -98,6 +98,33 @@ func backdoorSession(id string) (string, string) {
 	return "local:" + id, id
 }
 
+// sanitizeHistory mirrors the gateway's history budget for door-provided
+// turns: blanks dropped, each turn cut to 500 runes, roles collapsed to
+// the gateway's user/assistant pair (arbitrary roles from JSON must never
+// reach the model as prompt-steering vectors), and the tail capped past
+// the filter so thousands of small turns cannot inflate the turn.
+func sanitizeHistory(in []gorelay.Message) []gorelay.Message {
+	out := make([]gorelay.Message, 0, len(in))
+	for _, m := range in {
+		if strings.TrimSpace(m.Content) == "" {
+			continue
+		}
+		if utf8.RuneCountInString(m.Content) > 500 {
+			m.Content = cutRunes(m.Content, 500)
+		}
+		if !strings.EqualFold(strings.TrimSpace(m.Role), "assistant") {
+			m.Role = "user"
+		} else {
+			m.Role = "assistant"
+		}
+		out = append(out, m)
+	}
+	if len(out) > 20 {
+		out = out[len(out)-20:]
+	}
+	return out
+}
+
 // bearerOK constant-time compares the request's bearer token against the
 // configured secret. The secret never reaches logs or responses — only the
 // boolean outcome does.
@@ -156,18 +183,7 @@ func (b *Bot) converseHandler(token string) http.Handler {
 			return
 		}
 		relaySession, clientSession := backdoorSession(req.Session)
-		// History mirrors the gateway's 500-rune per-turn cut so the
-		// model sees the same context budget curl and Discord provide.
-		history := make([]gorelay.Message, 0, len(req.History))
-		for _, m := range req.History {
-			if strings.TrimSpace(m.Content) == "" {
-				continue
-			}
-			if utf8.RuneCountInString(m.Content) > 500 {
-				m.Content = cutRunes(m.Content, 500)
-			}
-			history = append(history, m)
-		}
+		history := sanitizeHistory(req.History)
 		ctx, cancel := context.WithTimeout(r.Context(), converseTimeout)
 		defer cancel()
 		// Cheap commands burn nothing and ignore the belt, exactly like
@@ -218,7 +234,10 @@ func (b *Bot) StartBackdoor(ctx context.Context, addr, token string) error {
 	if err != nil {
 		return fmt.Errorf("local backdoor: listen: %w", err)
 	}
-	srv := &http.Server{Handler: b.converseHandler(token)}
+	srv := &http.Server{
+		Handler:           b.converseHandler(token),
+		ReadHeaderTimeout: 5 * time.Second,
+	}
 	go func() {
 		<-ctx.Done()
 		shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
