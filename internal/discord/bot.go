@@ -129,6 +129,32 @@ func cutRunes(s string, n int) string {
 	return string([]rune(s)[:n])
 }
 
+// modelReplyBudget caps raw model output before Postprocess appends the
+// "Over." sign-off: 1900 runes leave headroom for the truncation trailer
+// plus sign-off so the Discord 2000-character send never spills.
+const modelReplyBudget = 1900
+
+// truncationTrailer closes a cut reply as an offer, not a severed line. It
+// rides before Postprocess so the sign-off still lands intact.
+const truncationTrailer = "Cut short for the wire — say the word for more."
+
+// boundModelReply caps a model reply at modelReplyBudget runes, cutting at
+// the last line break within budget so only complete lines post (hard cut
+// when the head is one line). Short replies pass through untouched.
+// A truncated head gains the in-voice trailer inviting a follow-up.
+func boundModelReply(s string) string {
+	if utf8.RuneCountInString(s) <= modelReplyBudget {
+		return s
+	}
+	head := string([]rune(s)[:modelReplyBudget])
+	if idx := strings.LastIndex(head, "\n"); idx >= 0 {
+		if trimmed := strings.TrimRight(head[:idx], " \t\r\n"); trimmed != "" {
+			head = trimmed
+		}
+	}
+	return head + "\n\n" + truncationTrailer
+}
+
 // gatePass is the mention-gate truth table: open-allowlist mode admits
 // everything; otherwise a mention, a free-response channel, or a live
 // thread session is required.
@@ -376,8 +402,9 @@ func (b *Bot) onMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 	// The relay session follows the reply channel: a fresh thread gets its
 	// own session, and follow-ups inside it (ChannelID == thread ID) stay
 	// continuous with the answer that opened it.
-	// Cut before Postprocess so a >2000-rune reply never amputates the
-	// sign-off: truncation happens first, "Over." lands intact.
-	reply := persona.Postprocess(cutRunes(b.Relay.ChatWithTools(ctx, system, q, history, replyChannel, mcpdb.ToolDefs(), b.Tools.Execute), 2000))
+	// Bound before Postprocess so a long reply never amputates the
+	// sign-off and never spills past Discord's ceiling: truncation
+	// happens first, trailer + "Over." land intact.
+	reply := persona.Postprocess(boundModelReply(b.Relay.ChatWithTools(ctx, system, q, history, replyChannel, mcpdb.ToolDefs(), b.Tools.Execute)))
 	b.sendReply(s, m, ch, replyChannel, reply)
 }
