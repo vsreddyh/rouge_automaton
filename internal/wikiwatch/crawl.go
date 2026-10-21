@@ -2,6 +2,7 @@ package wikiwatch
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"strconv"
 	"strings"
@@ -9,6 +10,8 @@ import (
 
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
+
+	"rouge_automaton/internal/wikifeed"
 )
 
 // CrawlShelves are the shelves the crawler refreshes from the wiki: the
@@ -135,12 +138,7 @@ func (w *Watcher) docTitle(doc bson.M) string {
 
 // sourceURL builds the wiki URL for a page title.
 func (w *Watcher) sourceURL(title string) string {
-	return w.FeedURLBase() + "/wiki/" + slugTitle(title)
-}
-
-// slugTitle turns a wiki title into its URL slug.
-func slugTitle(title string) string {
-	return strings.ReplaceAll(strings.TrimSpace(title), " ", "_")
+	return w.FeedURLBase() + "/wiki/" + wikifeed.PagePath(title)
 }
 
 // track registers a page in tracked_pages so the next poll can diff it.
@@ -174,5 +172,5 @@ func toString(v any) string {
 	case int64:
 		return strconv.FormatInt(t, 10)
 	}
-	return ""
+	return fmt.Sprint(v)
 }

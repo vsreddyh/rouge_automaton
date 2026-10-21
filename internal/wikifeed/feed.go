@@ -565,3 +565,15 @@ func numVal(v any) float64 {
 func Slug(title string) string {
 	return strings.ReplaceAll(title, " ", "_")
 }
+
+// PagePath builds the wiki path for a title. MediaWiki reads "/" in a
+// title as a subpage separator, so the slashes stay and only the
+// segments are escaped: a title carrying "?" or "#" must not produce a
+// broken link.
+func PagePath(title string) string {
+	parts := strings.Split(title, "/")
+	for i, p := range parts {
+		parts[i] = url.PathEscape(strings.ReplaceAll(p, " ", "_"))
+	}
+	return strings.Join(parts, "/")
+}

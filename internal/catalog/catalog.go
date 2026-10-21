@@ -238,6 +238,11 @@ func (c *Client) Fetch(ctx context.Context, coll, etag string) (FetchResult, err
 	defer resp.Body.Close()
 	newETag := resp.Header.Get("ETag")
 	if resp.StatusCode == http.StatusNotModified {
+		// A 304 often carries no ETag: keep the validator we sent, or
+		// the next poll would download the whole payload again.
+		if newETag == "" {
+			newETag = etag
+		}
 		return FetchResult{ETag: newETag, NotModified: true}, nil
 	}
 	if resp.StatusCode != http.StatusOK {

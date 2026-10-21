@@ -62,14 +62,14 @@ func run() error {
 	if *once {
 		return report(catalog.Sync(ctx, catalog.Options{
 			DB:     db,
-			Client: catalog.NewWithUA(cfg.WikiUserAgent),
+			Client: catalog.NewWithUA(cfg.CatalogUserAgent),
 		}))
 	}
 	log.Printf("catalog: syncing every %s", *interval)
 	for {
 		if err := report(catalog.Sync(ctx, catalog.Options{
 			DB:     db,
-			Client: catalog.NewWithUA(cfg.WikiUserAgent),
+			Client: catalog.NewWithUA(cfg.CatalogUserAgent),
 		})); err != nil {
 			log.Printf("catalog: sync: %v", err)
 		}
@@ -96,6 +96,9 @@ func report(results []catalog.Result, err error) error {
 		}
 		fmt.Printf("catalog: %s items=%d updated=%d unchanged=%d new=%d removed=%d mismatches=%d\n",
 			r.Shelf, r.Items, r.Updated, r.Unchanged, r.New, r.Removed, r.Mismatches)
+		if r.Err != "" {
+			log.Printf("catalog: %s: %s", r.Shelf, r.Err)
+		}
 		for _, s := range r.Sources {
 			if s.Err != "" {
 				log.Printf("catalog: %s: %s", s.Collection, s.Err)

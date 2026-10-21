@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"log"
-	"regexp"
 	"strings"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -105,6 +104,9 @@ func (w *Watcher) Discover(ctx context.Context) (int, error) {
 	}
 	placed := 0
 	attempts := 0
+	// The catalog index is read once per pass: parsing the cached
+	// payloads for every unseen page would cost megabytes per poll.
+	index := catalog.LoadIndex(ctx, w.DB)
 	for i, title := range titles {
 		if attempts >= limit {
 			// Keep the rest for the next poll: every attempt costs a wiki
@@ -113,7 +115,7 @@ func (w *Watcher) Discover(ctx context.Context) (int, error) {
 			break
 		}
 		attempts++
-		ok, err := w.discoverOne(ctx, title)
+		ok, err := w.discoverOne(ctx, title, index)
 		if err != nil {
 			log.Printf("watch: discover %s: %v", title, err)
 			continue
@@ -140,14 +142,14 @@ func (w *Watcher) requeue(titles []string) {
 }
 
 // discoverOne routes one unseen page, fetches it and files it.
-func (w *Watcher) discoverOne(ctx context.Context, title string) (bool, error) {
+func (w *Watcher) discoverOne(ctx context.Context, title string, index *catalog.Index) (bool, error) {
 	// A page the store already knows (a gear doc the catalog synced, a
 	// seed that was never tracked) needs no wiki call to place.
 	shelf, ok := w.shelfForDoc(ctx, title)
 	if !ok {
 		// Gear is routed from the catalog: it knows every gear page, and
 		// it needs no wiki call to say so.
-		shelf, ok = catalog.LookupShelf(ctx, w.DB, title)
+		shelf, ok = index.Shelf(title)
 	}
 	if !ok {
 		// The wiki's own categories are the one thing the catalog cannot
@@ -253,9 +255,10 @@ func (w *Watcher) findDoc(ctx context.Context, shelf, title string) (bson.M, err
 		return nil, err
 	}
 	// The seed's names are not always spelled exactly like the wiki's
-	// titles, so fall back to a case-insensitive match.
-	re := regexp.MustCompile("^" + regexp.QuoteMeta(title) + "$")
-	err = coll.FindOne(ctx, bson.M{"name": bson.M{"$regex": re.String(), "$options": "i"}}).Decode(&doc)
+	// titles, so fall back to a case-insensitive match — the same
+	// collation the unique name indexes use.
+	err = coll.FindOne(ctx, bson.M{"name": title},
+		options.FindOne().SetCollation(&options.Collation{Locale: "en", Strength: 2})).Decode(&doc)
 	if err == nil {
 		return doc, nil
 	}

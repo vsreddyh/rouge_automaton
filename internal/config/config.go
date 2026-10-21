@@ -47,6 +47,10 @@ type Config struct {
 	// the default names the operator's wiki account and a reachable contact
 	// (see WIKI_USER_AGENT in .env.example).
 	WikiUserAgent string
+	// CatalogUserAgent identifies the bot to the gear catalog host. The
+	// catalog is a different host with its own rules, so it gets its own
+	// knob; an empty value keeps the catalog package's default.
+	CatalogUserAgent string
 }
 
 // getenv returns the variable's value, defaulting only when it is unset.
@@ -109,6 +113,9 @@ func Load() Config {
 		XSuperContact:        getenv("X_SUPER_CONTACT", "admin@example.com"),
 		WikiUserAgent: getenv("WIKI_USER_AGENT",
 			"rouge-automaton-watcher (wiki account: vsreddyh; contact: shouryanreddyh@gmail.com; use=reference)"),
+		// Empty means "use the catalog package's own default": the
+		// catalog host is not the wiki, and it has its own rules.
+		CatalogUserAgent: getenv("CATALOG_USER_AGENT", ""),
 	}
 }
 

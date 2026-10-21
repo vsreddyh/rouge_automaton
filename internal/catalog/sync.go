@@ -62,6 +62,8 @@ type Result struct {
 	// Mismatches counts docs whose curated fields disagree with the
 	// catalog. The disagreement is reported, never applied.
 	Mismatches int
+	// Err carries a shelf-level failure (the shelf was left untouched).
+	Err string
 }
 
 // Options configures a sync.
@@ -142,6 +144,15 @@ func Sync(ctx context.Context, opts Options) ([]Result, error) {
 				res2, err2 := opts.Client.Fetch(ctx, coll, "")
 				if err2 != nil {
 					f.Err = err2.Error()
+					failed++
+					break
+				}
+				if res2.NotModified {
+					// The catalog says "unchanged" but there is nothing
+					// to serve: an empty snapshot would report every doc
+					// as removed.
+					f.Err = "catalog answered 304 without a cached snapshot"
+					failed++
 					break
 				}
 				snaps[coll] = res2.Snapshot
@@ -170,6 +181,7 @@ func Sync(ctx context.Context, opts Options) ([]Result, error) {
 		sources := []Fetch{}
 		items := []Item{}
 		version := ""
+		loaded := false
 		for _, coll := range colls {
 			if ShelfForCollection(coll) != shelf {
 				continue
@@ -179,12 +191,24 @@ func Sync(ctx context.Context, opts Options) ([]Result, error) {
 			if version == "" {
 				version = snaps[coll].Version
 			}
+			if _, ok := snaps[coll]; ok {
+				loaded = true
+			}
 		}
 		if len(sources) == 0 {
 			continue
 		}
+		res := Result{Shelf: shelf, Sources: sources, Items: len(items)}
+		if !loaded {
+			// Every source of this shelf failed and nothing was cached:
+			// applying an empty item list would report every doc on the
+			// shelf as removed. Leave the shelf alone.
+			res.Err = "no catalog snapshot for this shelf: it was left untouched"
+			results = append(results, res)
+			continue
+		}
 		merged := mergeItems(items)
-		res := Result{Shelf: shelf, Sources: sources, Items: len(merged)}
+		res.Items = len(merged)
 		st, err := applyShelf(ctx, opts.DB, shelf, merged, info, version, opts.now())
 		res.Updated, res.Unchanged, res.New, res.Removed, res.Mismatches = st.updated, st.unchanged, st.new, st.removed, st.mismatches
 		if err != nil {
@@ -368,7 +392,7 @@ func applyShelf(ctx context.Context, db *mongo.Database, shelf string, items []I
 			}
 		}
 	}
-	seen := map[any]bool{}
+	seen := map[string]bool{}
 	for _, it := range items {
 		set := catalogFields(it, info, version, now)
 		// The armor and booster shelves have no catalog category of their
@@ -416,7 +440,7 @@ func applyShelf(ctx context.Context, db *mongo.Database, shelf string, items []I
 			st.new++
 			continue
 		}
-		seen[(*doc)["_id"]] = true
+		seen[docKey(*doc)] = true
 		mismatch := diffCurated(*doc, it)
 		if len(mismatch) > 0 {
 			set["catalog_mismatches"] = mismatch
@@ -439,7 +463,7 @@ func applyShelf(ctx context.Context, db *mongo.Database, shelf string, items []I
 	// that the item is gone from the game.
 	for i := range docs {
 		doc := docs[i]
-		if seen[doc["_id"]] {
+		if seen[docKey(doc)] {
 			continue
 		}
 		if _, ok := doc["catalog_id"]; !ok {
@@ -449,6 +473,19 @@ func applyShelf(ctx context.Context, db *mongo.Database, shelf string, items []I
 		log.Printf("catalog: %s %q is no longer in the catalog (kept, not deleted)", shelf, toString(doc["name"]))
 	}
 	return st, nil
+}
+
+// docKey identifies a doc by its _id, whatever shape it has.
+func docKey(doc bson.M) string {
+	switch t := doc["_id"].(type) {
+	case bson.ObjectID:
+		return t.Hex()
+	case string:
+		return t
+	case nil:
+		return "name:" + toString(doc["name"])
+	}
+	return fmt.Sprint(doc["_id"])
 }
 
 // loadShelf reads every doc of a shelf.
@@ -939,14 +976,20 @@ func bsonValue(v any) any {
 	}
 }
 
-// LookupShelf answers which shelf a wiki page belongs to, using the cached
-// catalog: the catalog knows every gear item's page, so a new gear page
-// needs no category guesswork. It never calls the catalog API.
-func LookupShelf(ctx context.Context, db *mongo.Database, title string) (string, bool) {
-	if db == nil || strings.TrimSpace(title) == "" {
-		return "", false
+// Index answers which shelf a wiki page belongs to, from the cached
+// catalog. The catalog knows every gear item's page, so a new gear page
+// needs no category guesswork — and it never calls the catalog API.
+type Index struct {
+	shelves map[string]string
+}
+
+// LoadIndex reads the cached catalog once and maps every gear page to its
+// shelf. One pass per discovery run, not one parse per unseen page.
+func LoadIndex(ctx context.Context, db *mongo.Database) *Index {
+	idx := &Index{shelves: map[string]string{}}
+	if db == nil {
+		return idx
 	}
-	want := normalize(title)
 	cache := NewCache(db)
 	for _, coll := range Collections {
 		shelf := ShelfForCollection(coll)
@@ -954,19 +997,51 @@ func LookupShelf(ctx context.Context, db *mongo.Database, title string) (string,
 			continue
 		}
 		snap, _, ok, err := cache.Load(ctx, coll)
-		if err != nil || !ok {
+		if err != nil {
+			log.Printf("catalog: index read %s: %v", coll, err)
+			continue
+		}
+		if !ok {
 			continue
 		}
 		for _, it := range snap.Items {
-			if normalize(it.Name) == want || normalize(it.Wiki.Title) == want {
-				return shelf, true
-			}
-			for _, a := range it.Aliases {
-				if normalize(a) == want {
-					return shelf, true
+			for _, key := range itemKeys(it) {
+				if _, exists := idx.shelves[key]; !exists {
+					idx.shelves[key] = shelf
 				}
 			}
 		}
 	}
-	return "", false
+	return idx
+}
+
+// itemKeys are the names a catalog item can be found by.
+func itemKeys(it Item) []string {
+	keys := []string{}
+	add := func(s string) {
+		if n := normalize(s); n != "" {
+			keys = append(keys, n)
+		}
+	}
+	add(it.Name)
+	add(it.Wiki.Title)
+	for _, a := range it.Aliases {
+		add(a)
+	}
+	return keys
+}
+
+// Shelf returns the shelf a page belongs to.
+func (i *Index) Shelf(title string) (string, bool) {
+	if i == nil {
+		return "", false
+	}
+	shelf, ok := i.shelves[normalize(title)]
+	return shelf, ok
+}
+
+// LookupShelf answers which shelf a wiki page belongs to, using the cached
+// catalog. It never calls the catalog API.
+func LookupShelf(ctx context.Context, db *mongo.Database, title string) (string, bool) {
+	return LoadIndex(ctx, db).Shelf(title)
 }

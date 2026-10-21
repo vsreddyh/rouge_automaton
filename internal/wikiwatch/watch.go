@@ -6,6 +6,7 @@ package wikiwatch
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"sort"
@@ -35,6 +36,10 @@ type Change struct {
 }
 
 // Watcher diffs the wiki feed against Mongo and refreshes changed docs.
+//
+// One watcher drives one poll loop: the queue of unseen pages and the set
+// of pages that matched no shelf are kept in memory and are not safe to
+// share between goroutines.
 type Watcher struct {
 	DB    *mongo.Database
 	Feed  *wikifeed.Client
@@ -79,14 +84,19 @@ func New(db *mongo.Database, feed *wikifeed.Client) *Watcher {
 	}
 }
 
-// Tracked returns the tracked_pages row for a title, if any.
-func (w *Watcher) Tracked(ctx context.Context, title string) (Tracked, bool) {
+// Tracked returns the tracked_pages row for a title, if any. A database
+// failure is reported as an error: a blind "not tracked" would queue every
+// feed entry for discovery and hammer the wiki.
+func (w *Watcher) Tracked(ctx context.Context, title string) (Tracked, bool, error) {
 	var doc bson.M
 	err := w.DB.Collection("tracked_pages").FindOne(ctx, bson.M{"title": title}).Decode(&doc)
 	if err != nil {
-		return Tracked{}, false
+		if errors.Is(err, mongo.ErrNoDocuments) {
+			return Tracked{}, false, nil
+		}
+		return Tracked{}, false, err
 	}
-	return trackedFrom(doc), true
+	return trackedFrom(doc), true, nil
 }
 
 func trackedFrom(doc bson.M) Tracked {
@@ -139,7 +149,12 @@ func (w *Watcher) Poll(ctx context.Context) ([]Change, error) {
 		if title == "" || strings.Contains(title, ":") {
 			continue
 		}
-		tr, ok := w.Tracked(ctx, title)
+		tr, ok, err := w.Tracked(ctx, title)
+		if err != nil {
+			// The store is unreachable: do not queue the page for
+			// discovery, that would spend wiki requests on a guess.
+			return nil, err
+		}
 		if !ok {
 			// An article the watcher has never seen: it may be new
 			// content, and it is placed on a shelf by the discovery pass.
@@ -172,7 +187,7 @@ func (w *Watcher) Poll(ctx context.Context) ([]Change, error) {
 			canon = title
 		}
 		if canon != tr.Title {
-			if alt, ok := w.Tracked(ctx, canon); ok {
+			if alt, ok, err := w.Tracked(ctx, canon); err == nil && ok {
 				tr = alt
 			}
 		}
@@ -249,7 +264,7 @@ func (w *Watcher) Refresh(ctx context.Context, ch Change) error {
 	if title == "" {
 		title = ch.Canonical
 	}
-	sourceURL := w.FeedURLBase() + "/wiki/" + wikifeed.Slug(title)
+	sourceURL := w.FeedURLBase() + "/wiki/" + wikifeed.PagePath(title)
 	filter := bson.M{"source_url": sourceURL}
 	var cur bson.M
 	err = w.DB.Collection(coll).FindOne(ctx, filter).Decode(&cur)
@@ -456,11 +471,12 @@ func (w *Watcher) Backfill(ctx context.Context) (int, error) {
 		cur, err := w.DB.Collection(coll).Find(ctx, bson.M{},
 			options.Find().SetProjection(bson.M{"source_url": 1, "rev_id": 1, "name": 1, "wiki_title": 1}))
 		if err != nil {
-			continue
+			return seen, fmt.Errorf("watch: backfill %s: %w", coll, err)
 		}
 		for cur.Next(ctx) {
 			var doc bson.M
 			if err := cur.Decode(&doc); err != nil {
+				log.Printf("watch: backfill %s: decode: %v", coll, err)
 				continue
 			}
 			url, _ := doc["source_url"].(string)
@@ -479,11 +495,22 @@ func (w *Watcher) Backfill(ctx context.Context) (int, error) {
 				bson.M{"title": title},
 				bson.M{"$set": bson.M{"url": url, "collection": coll, "rev_id": rev}},
 				options.UpdateOne().SetUpsert(true))
+			if err != nil {
+				log.Printf("watch: backfill %s %s: %v", coll, title, err)
+				continue
+			}
 			// Count only rows this run created: re-fetched rows report
 			// MatchedCount, so restarts no longer overstate the log line.
-			if err == nil && res.UpsertedCount > 0 {
+			if res.UpsertedCount > 0 {
 				seen++
 			}
+		}
+		// A cursor error (a broken connection, a server hiccup) must not
+		// read as "this shelf has no docs": the pages would look
+		// untracked and the watcher would queue them all.
+		if err := cur.Err(); err != nil {
+			cur.Close(context.WithoutCancel(ctx))
+			return seen, fmt.Errorf("watch: backfill %s: %w", coll, err)
 		}
 		if err := cur.Close(ctx); err != nil {
 			log.Printf("watch: cursor close: %v", err)
