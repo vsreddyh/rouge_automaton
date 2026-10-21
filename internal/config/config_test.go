@@ -19,7 +19,8 @@ func TestDefaults(t *testing.T) {
 		t.Fatalf("empty channels must stay empty, got %v", c.FreeResponseChannels)
 	}
 	for _, k := range []string{"DISCORD_FREE_RESPONSE_CHANNELS", "MONGO_URI", "MODEL",
-		"OPENCODE_GO_BASE_URL", "HD2_API_BASE", "X_SUPER_CLIENT", "X_SUPER_CONTACT"} {
+		"OPENCODE_GO_BASE_URL", "HD2_API_BASE", "X_SUPER_CLIENT", "X_SUPER_CONTACT",
+		"WIKI_USER_AGENT"} {
 		os.Unsetenv(k)
 	}
 	c = Load()
