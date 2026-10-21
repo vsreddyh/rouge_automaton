@@ -62,10 +62,22 @@ func ValidateBackdoorAddr(addr string) error {
 	}
 	host, _, err := net.SplitHostPort(addr)
 	if err != nil {
-		return fmt.Errorf("local backdoor: bad bind address %q: %v", addr, err)
+		return fmt.Errorf("local backdoor: bad bind address %q: %w", addr, err)
 	}
 	host = strings.TrimSpace(host)
 	if strings.EqualFold(host, "localhost") {
+		// The name is allowlisted, but Listen resolves it at bind time —
+		// verify the resolver before trusting it, so a poisoned /etc/hosts
+		// cannot swing the door onto a non-loopback interface.
+		ips, err := net.LookupIP(host)
+		if err != nil || len(ips) == 0 {
+			return fmt.Errorf("local backdoor: cannot resolve %q: %w", host, err)
+		}
+		for _, ip := range ips {
+			if !ip.IsLoopback() {
+				return fmt.Errorf("local backdoor: refusing non-loopback bind %q", addr)
+			}
+		}
 		return nil
 	}
 	ip := net.ParseIP(host)
@@ -78,10 +90,22 @@ func ValidateBackdoorAddr(addr string) error {
 // backdoorSession normalizes a client session ID for relay continuity: the
 // relay session is "local:"+id so follow-ups stay continuous without
 // touching Discord thread state. Blank IDs get a fresh random hex ID;
-// overlong IDs truncate to 64 runes; CR/LF are stripped so the value is
-// always header-safe. The returned pair is (relaySession, clientSession).
+// overlong IDs truncate to 64 runes; anything outside [A-Za-z0-9_-] is
+// coerced to "_" so the value is always header-safe for x-opencode-session
+// (CR/LF stripping alone still leaves controls, spaces and colons). The
+// returned pair is (relaySession, clientSession).
 func backdoorSession(id string) (string, string) {
-	id = strings.ReplaceAll(strings.ReplaceAll(strings.TrimSpace(id), "\r", ""), "\n", "")
+	id = strings.TrimSpace(id)
+	var sb strings.Builder
+	for _, r := range id {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_':
+			sb.WriteRune(r)
+		default:
+			sb.WriteRune('_')
+		}
+	}
+	id = sb.String()
 	if r := []rune(id); len(r) > 64 {
 		id = string(r[:64])
 	}
@@ -178,6 +202,10 @@ func (b *Bot) converseHandler(token string) http.Handler {
 			writeBackdoorJSON(w, http.StatusBadRequest, map[string]string{"error": "text and user are required"})
 			return
 		}
+		// Discord caps inbound messages at 2000 runes; bound the door the
+		// same way so a 1MB body cannot smuggle a ~500k-rune turn into the
+		// think-act loop that the gateway would never see.
+		q = cutRunes(q, 2000)
 		if !b.Cfg.Allowed(user) {
 			writeBackdoorJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
 			return
@@ -237,6 +265,12 @@ func (b *Bot) StartBackdoor(ctx context.Context, addr, token string) error {
 	srv := &http.Server{
 		Handler:           b.converseHandler(token),
 		ReadHeaderTimeout: 5 * time.Second,
+		// ReadTimeout bounds slow-body hold-open past the headers;
+		// IdleTimeout reaps idle keep-alives. No WriteTimeout: a full
+		// think-act turn legitimately holds the handler up to
+		// converseTimeout, and the response itself writes at once.
+		ReadTimeout: 30 * time.Second,
+		IdleTimeout: 60 * time.Second,
 	}
 	go func() {
 		<-ctx.Done()

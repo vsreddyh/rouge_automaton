@@ -349,6 +349,61 @@ func TestBackdoorHistorySanitized(t *testing.T) {
 	}
 }
 
+// Session IDs are coerced to a header-safe charset: anything outside
+// [A-Za-z0-9_-] becomes "_", overlong IDs truncate, blanks generate.
+func TestBackdoorSessionCharset(t *testing.T) {
+	relay, client := backdoorSession("a/b c:d")
+	if relay != "local:a_b_c_d" || client != "a_b_c_d" {
+		t.Fatalf("charset must coerce, got relay=%q client=%q", relay, client)
+	}
+	relay, client = backdoorSession("run-7_ok")
+	if relay != "local:run-7_ok" || client != "run-7_ok" {
+		t.Fatalf("clean IDs must pass through, got relay=%q client=%q", relay, client)
+	}
+	long := strings.Repeat("a", 100)
+	if _, client := backdoorSession(long); len([]rune(client)) != 64 {
+		t.Fatalf("overlong ID must truncate to 64 runes, got %d", len([]rune(client)))
+	}
+	if _, client := backdoorSession(""); client == "" {
+		t.Fatal("blank ID must generate, never stay empty")
+	}
+}
+
+// Overlong text is cut to the 2000-rune Discord ceiling before reaching
+// the relay, so the door can never feed the loop a turn the gateway
+// would never see.
+func TestBackdoorTextBound(t *testing.T) {
+	const token = "tok-bound"
+	var queries []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var v struct {
+			Input []gorelay.Message `json:"input"`
+		}
+		raw, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(raw, &v)
+		if len(v.Input) > 0 {
+			queries = append(queries, v.Input[len(v.Input)-1].Content)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"output": []any{map[string]any{
+				"type":    "message",
+				"content": []any{map[string]any{"type": "output_text", "text": "Hi. Over."}},
+			}},
+		})
+	}))
+	defer srv.Close()
+	b := testBackdoorBot(t, srv.URL, nil)
+	b.Relay.HTTP = srv.Client()
+	h := b.converseHandler(token)
+	rec := postConverse(t, h, token, map[string]string{"text": strings.Repeat("y", 5000), "user": "u1"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("converse must be 200, got %d", rec.Code)
+	}
+	if len(queries) != 1 || utf8.RuneCountInString(queries[0]) != 2000 {
+		t.Fatalf("relay must see exactly the 2000-rune cut, got %d queries", len(queries))
+	}
+}
+
 // The door never touches gateway state: no thread is tracked and nothing
 // is sent — converse runs purely through the relay.
 func TestBackdoorNoGatewaySideEffects(t *testing.T) {

@@ -37,8 +37,12 @@ func run() error {
 	// compare below can never disagree (" secret " must not enable an
 	// unauthenticatable door).
 	backdoorToken := strings.TrimSpace(cfg.LocalBackdoorToken)
+	// Trim the bind once: Validate trims internally, but Listen uses the
+	// raw value, so an untrimmed addr could pass validation then fail to
+	// bind. One trimmed copy feeds both.
+	backdoorAddr := strings.TrimSpace(cfg.LocalBackdoorAddr)
 	if backdoorToken != "" {
-		if err := godiscord.ValidateBackdoorAddr(cfg.LocalBackdoorAddr); err != nil {
+		if err := godiscord.ValidateBackdoorAddr(backdoorAddr); err != nil {
 			return err
 		}
 	} else {
@@ -65,7 +69,7 @@ func run() error {
 	defer stop()
 	if backdoorToken != "" {
 		go func() {
-			if err := bot.StartBackdoor(ctx, cfg.LocalBackdoorAddr, backdoorToken); err != nil {
+			if err := bot.StartBackdoor(ctx, backdoorAddr, backdoorToken); err != nil {
 				log.Printf("rouge: LOCAL BACKDOOR FAILED, gateway continuing: %v", err)
 			}
 		}()
