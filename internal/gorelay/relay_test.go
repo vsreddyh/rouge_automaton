@@ -433,8 +433,10 @@ func TestProbeRateLimited(t *testing.T) {
 	}
 }
 
-// TestOutputTokenCeiling pins issue #44 §3: Chat and ChatWithTools request
-// 4096 output tokens (fuller answers allowed), while Probe stays at 1.
+// TestOutputTokenCeiling pins issue #44 §3 and issue #70: Chat and
+// ChatWithTools request 4096 output tokens (fuller answers allowed), while
+// Probe stays at the 16-token minimum the relay honors (1-token probes are
+// rejected with HTTP 400, which must never read as clear).
 func TestOutputTokenCeiling(t *testing.T) {
 	check := func(t *testing.T, path string, call func(c *Client), want float64) {
 		t.Helper()
@@ -471,7 +473,7 @@ func TestOutputTokenCeiling(t *testing.T) {
 		c.ChatWithTools(context.Background(), "", "hi", nil, "s", nil,
 			func(ctx context.Context, name, args string) string { return "" })
 	}, 4096)
-	check(t, "probe", func(c *Client) { c.Probe(context.Background()) }, 1)
+	check(t, "probe", func(c *Client) { c.Probe(context.Background()) }, 16)
 }
 
 // TestToolOutputCapped pins the input-growth bound: an overlong tool

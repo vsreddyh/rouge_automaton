@@ -275,9 +275,14 @@ func (c *Client) doRound(ctx context.Context, url, session string, body []byte) 
 	return roundResult{reply: Dead, retryable: true}
 }
 
-// Probe checks model-backend reachability with a minimal 1-token request.
-// It returns "clear" (200), "busy" (429), or "dead" (anything else) so
-// /status can report uplink state without parsing a full answer.
+// Probe checks model-backend reachability with a minimal request. It uses
+// a 16-token ceiling: the relay rejects 1-token completions with HTTP 400
+// (issue #70 — verified from the host: 1 → 400, 16/64/256 → 200), which
+// Probe would otherwise misread as an outage. 16 is the smallest ceiling
+// the relay honors, so the probe keeps its cheap health-check intent. It
+// returns "clear" (200), "busy" (429), or "dead" (anything else, including
+// a real 400 from a bad key or decommissioned model) so /status can report
+// uplink state without parsing a full answer.
 func (c *Client) Probe(ctx context.Context) string {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
@@ -285,7 +290,7 @@ func (c *Client) Probe(ctx context.Context) string {
 	body, _ := json.Marshal(map[string]any{
 		"model":             c.Model,
 		"input":             []Message{{Role: "user", Content: "ping"}},
-		"max_output_tokens": 1, "temperature": 0,
+		"max_output_tokens": 16, "temperature": 0,
 		"reasoning": map[string]any{"effort": "low"},
 	})
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
