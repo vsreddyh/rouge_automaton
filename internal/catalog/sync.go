@@ -208,10 +208,12 @@ func Sync(ctx context.Context, opts Options) ([]Result, error) {
 		res.Updated, res.Unchanged, res.New, res.Removed, res.Mismatches = st.updated, st.unchanged, st.new, st.removed, st.mismatches
 		res.Failed = st.failed
 		if err != nil {
-			// The shelf failed: report it instead of dropping the line.
+			// The shelf failed: report it and carry on with the others.
+			// One bad shelf must not cost the whole sync.
 			res.Err = err.Error()
 			results = append(results, res)
-			return results, err
+			log.Printf("catalog: %s: %v", shelf, err)
+			continue
 		}
 		results = append(results, res)
 	}

@@ -81,8 +81,8 @@ func run() error {
 // report prints one line per crawled shelf.
 func report(results []wikiwatch.CrawlResult, err error) error {
 	for _, r := range results {
-		fmt.Printf("crawl: %s pages=%d updated=%d unchanged=%d missing=%d failed=%d\n",
-			r.Shelf, r.Pages, r.Updated, r.Unchanged, r.Missing, r.Failed)
+		fmt.Printf("crawl: %s attempts=%d updated=%d unchanged=%d missing=%d failed=%d\n",
+			r.Shelf, r.Attempts, r.Updated, r.Unchanged, r.Missing, r.Failed)
 	}
 	return err
 }

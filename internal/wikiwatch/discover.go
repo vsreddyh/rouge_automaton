@@ -153,7 +153,13 @@ func (w *Watcher) discoverOne(ctx context.Context, title string, index *catalog.
 		// A page the store already knows (a gear doc the catalog synced
 		// under another name, a seed that was never tracked) needs no
 		// wiki call to place.
-		shelf, ok = w.shelfForDoc(ctx, title)
+		docShelf, found, err := w.shelfForDoc(ctx, title)
+		if err != nil {
+			// The store is unreachable: do not fall through to a wiki
+			// call on a guess.
+			return false, err
+		}
+		shelf, ok = docShelf, found
 	}
 	if !ok {
 		// The wiki's own categories are the one thing the catalog cannot
@@ -178,26 +184,24 @@ func (w *Watcher) discoverOne(ctx context.Context, title string, index *catalog.
 }
 
 // shelfForDoc finds the shelf a doc with this name already lives on. It
-// costs Mongo lookups, not wiki requests.
-func (w *Watcher) shelfForDoc(ctx context.Context, title string) (string, bool) {
+// costs Mongo lookups, not wiki requests. A database failure is an error:
+// reading it as "not on a shelf" would spend a wiki request on a guess.
+func (w *Watcher) shelfForDoc(ctx context.Context, title string) (string, bool, error) {
 	if w.DB == nil {
-		return "", false
+		return "", false, nil
 	}
 	for _, shelf := range Shelves {
 		count, err := w.DB.Collection(shelf).CountDocuments(ctx,
 			bson.M{"name": title},
 			options.Count().SetLimit(1).SetCollation(ciCollation))
 		if err != nil {
-			// The store is unreachable: do not read that as "not on a
-			// shelf", that would spend a wiki request on a guess.
-			log.Printf("watch: shelf lookup %s %s: %v", shelf, title, err)
-			return "", false
+			return "", false, err
 		}
 		if count > 0 {
-			return shelf, true
+			return shelf, true, nil
 		}
 	}
-	return "", false
+	return "", false, nil
 }
 
 // ciCollation matches names the way the unique name indexes do: case

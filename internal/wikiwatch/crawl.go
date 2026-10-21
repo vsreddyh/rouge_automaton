@@ -25,8 +25,9 @@ var CrawlShelves = []string{
 type CrawlResult struct {
 	// Shelf is the Mongo collection that was crawled.
 	Shelf string
-	// Pages is the number of wiki pages fetched.
-	Pages int
+	// Attempts is the number of wiki pages the crawl asked for (a
+	// request that failed counts too: the cap is on traffic).
+	Attempts int
 	// Updated counts docs whose wiki fields changed.
 	Updated int
 	// Unchanged counts docs already carrying the same revision.
@@ -77,7 +78,7 @@ func (w *Watcher) Crawl(ctx context.Context) ([]CrawlResult, error) {
 			// The cap counts attempts, not successes: a wiki that keeps
 			// failing is exactly when the crawl must stop asking.
 			fetched++
-			res.Pages++
+			res.Attempts++
 			page, err := w.Feed.Page(ctx, title)
 			if err != nil {
 				res.Failed++
