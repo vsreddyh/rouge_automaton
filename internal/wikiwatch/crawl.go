@@ -2,15 +2,14 @@ package wikiwatch
 
 import (
 	"context"
-	"fmt"
 	"log"
-	"strconv"
 	"strings"
 	"time"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
+	"rouge_automaton/internal/docval"
 	"rouge_automaton/internal/wikifeed"
 )
 
@@ -103,7 +102,7 @@ func (w *Watcher) Crawl(ctx context.Context) ([]CrawlResult, error) {
 			}
 			sourceURL := w.sourceURL(canonical)
 			// A second run over unchanged pages must write nothing.
-			if numInt(doc["rev_id"]) == page.RevID && toString(doc["source_url"]) == sourceURL {
+			if numInt(doc["rev_id"]) == page.RevID && docval.Value(doc["source_url"]) == sourceURL {
 				res.Unchanged++
 				continue
 			}
@@ -144,13 +143,13 @@ func (w *Watcher) shelfDocs(ctx context.Context, shelf string) ([]bson.M, error)
 // docTitle is the wiki page a doc came from: the wiki title if it has one,
 // else the page behind its source URL, else its name.
 func (w *Watcher) docTitle(doc bson.M) string {
-	if t := strings.TrimSpace(toString(doc["wiki_title"])); t != "" {
+	if t := strings.TrimSpace(docval.Value(doc["wiki_title"])); t != "" {
 		return t
 	}
-	if t := titleFromURL(toString(doc["source_url"])); t != "" {
+	if t := titleFromURL(docval.Value(doc["source_url"])); t != "" {
 		return t
 	}
-	return strings.TrimSpace(toString(doc["name"]))
+	return strings.TrimSpace(docval.Value(doc["name"]))
 }
 
 // sourceURL builds the wiki URL for a page title.
@@ -167,27 +166,4 @@ func (w *Watcher) track(ctx context.Context, title, url, shelf string, rev int) 
 		}},
 		options.UpdateOne().SetUpsert(true))
 	return err
-}
-
-// toString renders a BSON value as one line of text.
-func toString(v any) string {
-	switch t := v.(type) {
-	case string:
-		return t
-	case nil:
-		return ""
-	case bool:
-		return strconv.FormatBool(t)
-	case float64:
-		return strconv.FormatFloat(t, 'f', -1, 64)
-	case float32:
-		return strconv.FormatFloat(float64(t), 'f', -1, 64)
-	case int:
-		return strconv.Itoa(t)
-	case int32:
-		return strconv.Itoa(int(t))
-	case int64:
-		return strconv.FormatInt(t, 10)
-	}
-	return fmt.Sprint(v)
 }

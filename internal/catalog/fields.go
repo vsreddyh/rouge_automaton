@@ -2,13 +2,14 @@ package catalog
 
 import (
 	"encoding/json"
-	"fmt"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
+
+	"rouge_automaton/internal/docval"
 )
 
 // curatedFields never come from the catalog: they are the seed job's work
@@ -198,78 +199,175 @@ type Mismatch struct {
 
 var numberRe = regexp.MustCompile(`\d[\d,]*(?:\.\d+)?`)
 
+// paramCheck pairs a curated params key with the catalog field it is
+// compared against.
+//
+// Only the fields both sources carry are listed. The catalog has no weak
+// points and no counters, so those curated fields are never at risk. The
+// stratagem vocabulary differs too (the seed says "Objective" and
+// "Offense" where the catalog says "mission" and "offensive"), so those
+// are not compared: a flag there would be noise, not a disagreement.
+type paramCheck struct {
+	param string
+	field string
+}
+
+// weaponChecks are the weapon numbers the catalog carries precisely: a
+// seed rounds them ("13" for 13.25), and the difference is worth a flag.
+var weaponChecks = []paramCheck{
+	{"capacity", "capacity"},
+	{"dps", "dps"},
+	{"fire_rate", "fireRateRpm"},
+	{"recoil", "recoil"},
+	{"reload_time", "reloadTimeS"},
+	{"spare_mags", "spareMagazines"},
+	{"tac_reload_time", "tacticalReloadTimeS"},
+}
+
+// armorChecks are the armor numbers.
+var armorChecks = []paramCheck{
+	{"armor", "armor"},
+	{"speed", "speed"},
+	{"stam_regen", "stam_regen"},
+}
+
+// stratagemChecks are the stratagem numbers. The catalog's cooldown is the
+// one it lists (it carries the variants beside it).
+var stratagemChecks = []paramCheck{
+	{"base_cooldown", "cooldown"},
+	{"unlock_level", "unlock_level"},
+}
+
 // diffCurated reports where the curated seed and the catalog disagree. The
 // curated value wins; the difference is recorded, never applied.
+//
+// What is compared: the numbers both sources carry (a weapon's dps,
+// capacity, recoil, ...; an armor's rating; a stratagem's cooldown), the
+// aliases, and a role the seed never wrote. What is not: the prose. The
+// seed's role and the catalog's description are two ways of saying the
+// same thing, and a wording difference is not a disagreement.
 func diffCurated(doc bson.M, it Item) []Mismatch {
 	out := []Mismatch{}
+	// A name the catalog knows and the curated list does not.
+	if m := diffAliases(doc, it); m != nil {
+		out = append(out, *m)
+	}
+	// A role the seed never wrote: the catalog's description could fill
+	// it in, but writing it is the curator's job.
+	if strings.TrimSpace(docval.Value(doc["role"])) == "" && it.Description != "" {
+		out = append(out, Mismatch{Field: "role", Curated: "", Catalog: it.Description})
+	}
 	params, ok := paramBag(doc)
 	if !ok {
 		return out
 	}
-	// Damage per second: the catalog carries both firing modes, a seed
-	// usually carries one.
 	if len(it.Firearm) > 0 {
-		if dps, ok := it.Firearm["dps"].([]any); ok && len(dps) > 0 {
-			curated := toString(params["dps"])
-			have := numbersIn(curated)
-			missing := []string{}
-			for _, d := range dps {
-				n, ok := toFloat(d)
-				if !ok {
-					continue
-				}
-				if !containsNumber(have, n) {
-					missing = append(missing, trimNumber(n))
-				}
-			}
-			if len(missing) > 0 {
-				out = append(out, Mismatch{
-					Field:   "params.dps",
-					Curated: curated,
-					Catalog: strings.Join(missing, ", "),
-				})
-			}
-		}
+		out = append(out, diffNumbers(params, weaponChecks, it.Firearm)...)
 	}
-	// Armor numbers.
-	for _, pair := range []struct{ key, field string }{
-		{"armor", "armor_rating"},
-		{"speed", "speed"},
-		{"stam_regen", "stamina_regen"},
-	} {
-		curated := toString(params[pair.key])
+	out = append(out, diffNumbers(params, armorChecks, armorValues(it))...)
+	out = append(out, diffNumbers(params, stratagemChecks, stratagemValues(it))...)
+	return out
+}
+
+// armorValues are the armor numbers the catalog carries.
+func armorValues(it Item) map[string]any {
+	return map[string]any{
+		"armor":      it.ArmorRating,
+		"speed":      it.Speed,
+		"stam_regen": it.StaminaRegen,
+	}
+}
+
+// stratagemValues are the stratagem numbers the catalog carries.
+func stratagemValues(it Item) map[string]any {
+	return map[string]any{
+		"cooldown":     it.CooldownS,
+		"unlock_level": it.UnlockLevel,
+	}
+}
+
+// diffNumbers compares the curated params against the catalog's numbers. A
+// catalog number the curated text does not carry is a difference: the
+// seed rounds, or picked one firing mode.
+func diffNumbers(params map[string]any, checks []paramCheck, values map[string]any) []Mismatch {
+	out := []Mismatch{}
+	for _, c := range checks {
+		curated := docval.Value(params[c.param])
 		if curated == "" {
 			continue
 		}
-		var catalogVal any
-		switch pair.field {
-		case "armor_rating":
-			catalogVal = it.ArmorRating
-		case "speed":
-			catalogVal = it.Speed
-		case "stamina_regen":
-			catalogVal = it.StaminaRegen
-		}
-		if catalogVal == nil {
+		catalogNums := catalogNumbers(values[c.field])
+		if len(catalogNums) == 0 {
 			continue
 		}
-		catNum, ok := toFloat(catalogVal)
-		if !ok {
+		have := numbersIn(curated)
+		missing := []string{}
+		for _, n := range catalogNums {
+			if !containsNumber(have, n) {
+				missing = append(missing, trimNumber(n))
+			}
+		}
+		if len(missing) == 0 {
 			continue
 		}
-		curNum, ok := toFloat(curated)
-		if !ok {
-			continue
-		}
-		if curNum != catNum {
-			out = append(out, Mismatch{
-				Field:   "params." + pair.key,
-				Curated: curated,
-				Catalog: trimNumber(catNum),
-			})
-		}
+		out = append(out, Mismatch{
+			Field:   "params." + c.param,
+			Curated: curated,
+			Catalog: strings.Join(missing, ", "),
+		})
 	}
 	return out
+}
+
+// catalogNumbers reads the numeric values of a catalog field, which is a
+// number or a list of them.
+func catalogNumbers(v any) []float64 {
+	switch t := v.(type) {
+	case []any:
+		var out []float64
+		for _, e := range t {
+			if n, ok := toFloat(e); ok {
+				out = append(out, n)
+			}
+		}
+		return out
+	case nil:
+		return nil
+	}
+	if n, ok := toFloat(v); ok {
+		return []float64{n}
+	}
+	return nil
+}
+
+// diffAliases reports an alias the catalog knows and the curated list does
+// not. The curated list may hold more (the seed's short forms), so only
+// the catalog's gaps are reported.
+func diffAliases(doc bson.M, it Item) *Mismatch {
+	if len(it.Aliases) == 0 {
+		return nil
+	}
+	curated := docval.List(doc, "aliases")
+	known := map[string]bool{}
+	for _, a := range curated {
+		known[normalize(a)] = true
+	}
+	missing := []string{}
+	for _, a := range it.Aliases {
+		key := normalize(a)
+		if key == "" || known[key] {
+			continue
+		}
+		missing = append(missing, a)
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	return &Mismatch{
+		Field:   "aliases",
+		Curated: strings.Join(curated, ", "),
+		Catalog: strings.Join(missing, ", "),
+	}
 }
 
 // paramBag reads a doc's nested params document in any writer shape: the
@@ -348,7 +446,7 @@ func paramsFromStats(stats map[string]any) bson.M {
 		if key == "" {
 			continue
 		}
-		out[key] = toString(v)
+		out[key] = docval.Value(v)
 	}
 	return out
 }
@@ -371,56 +469,6 @@ func paramKey(s string) string {
 		key = strings.ReplaceAll(key, "__", "_")
 	}
 	return key
-}
-
-// toString renders a BSON value as one line of text.
-func toString(v any) string {
-	switch t := v.(type) {
-	case string:
-		return t
-	case nil:
-		return ""
-	case bool:
-		return strconv.FormatBool(t)
-	case float64:
-		return trimNumber(t)
-	case float32:
-		return trimNumber(float64(t))
-	case int:
-		return strconv.Itoa(t)
-	case int32:
-		return strconv.FormatInt(int64(t), 10)
-	case int64:
-		return strconv.FormatInt(t, 10)
-	}
-	return fmt.Sprint(v)
-}
-
-// stringList reads a list field in any writer shape.
-func stringList(doc bson.M, key string) []string {
-	switch t := doc[key].(type) {
-	case bson.A:
-		var out []string
-		for _, e := range t {
-			if s := toString(e); s != "" {
-				out = append(out, s)
-			}
-		}
-		return out
-	case []string:
-		return t
-	case []any:
-		var out []string
-		for _, e := range t {
-			if s := toString(e); s != "" {
-				out = append(out, s)
-			}
-		}
-		return out
-	case string:
-		return []string{t}
-	}
-	return nil
 }
 
 // toBsonM converts a decoded JSON map into a BSON-safe document, so the

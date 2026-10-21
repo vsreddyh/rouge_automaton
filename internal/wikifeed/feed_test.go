@@ -66,9 +66,18 @@ func TestPageMissing(t *testing.T) {
 	}
 }
 
-func TestSlug(t *testing.T) {
-	if Slug("Hulk Bruiser") != "Hulk_Bruiser" {
-		t.Fatal("slug mismatch")
+func TestPagePath(t *testing.T) {
+	if got := PagePath("Hulk Bruiser"); got != "Hulk_Bruiser" {
+		t.Fatalf("path = %q", got)
+	}
+	// A slash is a subpage separator, so it stays; the segments around
+	// it are escaped.
+	if got := PagePath("G/40-K Melta Mine"); got != "G/40-K_Melta_Mine" {
+		t.Fatalf("path = %q", got)
+	}
+	// A title carrying a query character must not break the link.
+	if got := PagePath("Foo?Bar"); got != "Foo%3FBar" {
+		t.Fatalf("path = %q", got)
 	}
 }
 

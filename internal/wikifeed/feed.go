@@ -15,6 +15,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"rouge_automaton/internal/httpx"
 )
 
 // DefaultBase is the Helldivers wiki. Tests override Client.Base.
@@ -202,10 +204,7 @@ func responseError(resp *http.Response, body []byte) error {
 	if code == "" && len(body) > 0 {
 		// A plain-text proxy error still carries the reason sometimes
 		// ("You've exceeded your rate limit"); keep a short snippet.
-		info = strings.TrimSpace(string(body))
-		if len(info) > 200 {
-			info = info[:200]
-		}
+		info = httpx.BodySnippet(body)
 	}
 	lower := strings.ToLower(code + " " + info)
 	limited := resp.StatusCode == http.StatusTooManyRequests ||
@@ -561,11 +560,6 @@ func numVal(v any) float64 {
 	return f
 }
 
-// Slug converts a wiki title to its URL slug (spaces to underscores).
-func Slug(title string) string {
-	return strings.ReplaceAll(title, " ", "_")
-}
-
 // PagePath builds the wiki path for a title. MediaWiki reads "/" in a
 // title as a subpage separator, so the slashes stay and only the
 // segments are escaped: a title carrying "?" or "#" must not produce a
@@ -573,7 +567,7 @@ func Slug(title string) string {
 func PagePath(title string) string {
 	parts := strings.Split(title, "/")
 	for i, p := range parts {
-		parts[i] = url.PathEscape(Slug(p))
+		parts[i] = url.PathEscape(strings.ReplaceAll(p, " ", "_"))
 	}
 	return strings.Join(parts, "/")
 }

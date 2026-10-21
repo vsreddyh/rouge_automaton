@@ -11,6 +11,8 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
+
+	"rouge_automaton/internal/docval"
 )
 
 // ciCollation matches names the way the unique name indexes do:
@@ -484,7 +486,7 @@ func applyShelf(ctx context.Context, db *mongo.Database, shelf string, items []I
 			continue
 		}
 		st.removed++
-		log.Printf("catalog: %s %q is no longer in the catalog (kept, not deleted)", shelf, toString(doc["name"]))
+		log.Printf("catalog: %s %q is no longer in the catalog (kept, not deleted)", shelf, docval.Value(doc["name"]))
 	}
 	return st, nil
 }
@@ -497,7 +499,7 @@ func docKey(doc bson.M) string {
 	case string:
 		return t
 	case nil:
-		return "name:" + toString(doc["name"])
+		return "name:" + docval.Value(doc["name"])
 	}
 	return fmt.Sprint(doc["_id"])
 }
@@ -516,7 +518,7 @@ func loadShelf(ctx context.Context, db *mongo.Database, shelf string) ([]bson.M,
 		return nil, fmt.Errorf("catalog load %s: %w", shelf, err)
 	}
 	sort.Slice(docs, func(i, j int) bool {
-		return toString(docs[i]["name"]) < toString(docs[j]["name"])
+		return docval.Value(docs[i]["name"]) < docval.Value(docs[j]["name"])
 	})
 	return docs, nil
 }
@@ -525,18 +527,18 @@ func loadShelf(ctx context.Context, db *mongo.Database, shelf string) ([]bson.M,
 // wiki page it came from and that page's URL.
 func docKeys(doc bson.M) []string {
 	keys := []string{}
-	if n := normalize(toString(doc["name"])); n != "" {
+	if n := normalize(docval.Value(doc["name"])); n != "" {
 		keys = append(keys, n)
 	}
-	for _, a := range stringList(doc, "aliases") {
+	for _, a := range docval.List(doc, "aliases") {
 		if n := normalize(a); n != "" {
 			keys = append(keys, n)
 		}
 	}
-	if t := normalize(toString(doc["wiki_title"])); t != "" {
+	if t := normalize(docval.Value(doc["wiki_title"])); t != "" {
 		keys = append(keys, t)
 	}
-	if u := normalize(toString(doc["source_url"])); u != "" {
+	if u := normalize(docval.Value(doc["source_url"])); u != "" {
 		keys = append(keys, u)
 	}
 	return keys

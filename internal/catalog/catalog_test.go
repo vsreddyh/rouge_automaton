@@ -143,6 +143,43 @@ func TestDiffCuratedArmorNumbers(t *testing.T) {
 	}
 }
 
+// The seed rounds the weapon numbers; the catalog carries them exactly.
+// The difference is reported, never applied.
+func TestDiffCuratedReportsWeaponNumbers(t *testing.T) {
+	doc := bson.M{"params": bson.M{"recoil": "13", "capacity": "45"}}
+	it := Item{Firearm: map[string]any{"recoil": 13.25, "capacity": 45.0}}
+	diff := diffCurated(doc, it)
+	if len(diff) != 1 {
+		t.Fatalf("diff = %+v, want the rounded recoil only", diff)
+	}
+	if diff[0].Field != "params.recoil" {
+		t.Fatalf("field = %q", diff[0].Field)
+	}
+	if diff[0].Curated != "13" || diff[0].Catalog != "13.25" {
+		t.Fatalf("mismatch = %+v", diff[0])
+	}
+}
+
+// An alias the catalog knows and the seed does not, and a role the seed
+// never wrote: both are gaps the curator should see.
+func TestDiffCuratedReportsAliasAndRoleGaps(t *testing.T) {
+	doc := bson.M{"name": "Hover Pack", "aliases": bson.A{"LIFT-860"}}
+	it := Item{Description: "The Hover Pack is a backpack.", Aliases: []string{"LIFT-860 Hover Pack"}}
+	diff := diffCurated(doc, it)
+	fields := map[string]bool{}
+	for _, d := range diff {
+		fields[d.Field] = true
+	}
+	if !fields["aliases"] || !fields["role"] {
+		t.Fatalf("diff = %+v, want the alias and the role gap", diff)
+	}
+	// A curated role the catalog does not contradict is not a gap.
+	filled := bson.M{"name": "Hover Pack", "role": "A backpack."}
+	if diff := diffCurated(filled, it); len(diff) != 1 || diff[0].Field != "aliases" {
+		t.Fatalf("diff = %+v, want the alias gap only", diff)
+	}
+}
+
 func TestParamsFromStats(t *testing.T) {
 	params := paramsFromStats(map[string]any{"Standard Damage": "70 Ballistic", "Fire Rate": "1,200 rpm"})
 	if params["standard_damage"] != "70 Ballistic" || params["fire_rate"] != "1,200 rpm" {

@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"rouge_automaton/internal/httpx"
 	"rouge_automaton/internal/wikifeed"
 )
 
@@ -148,7 +149,7 @@ func (c *Client) get(ctx context.Context, params url.Values) (map[string]any, er
 		return nil, err
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("wiki status %d%s", resp.StatusCode, bodySnippet(body))
+		return nil, fmt.Errorf("wiki status %d%s", resp.StatusCode, httpx.BodySuffix(body))
 	}
 	var out map[string]any
 	if err := json.Unmarshal(body, &out); err != nil {
@@ -160,20 +161,6 @@ func (c *Client) get(ctx context.Context, params url.Values) (map[string]any, er
 		return nil, fmt.Errorf("wiki api error: %s", errText(apiErr))
 	}
 	return out, nil
-}
-
-// bodySnippet keeps a short piece of an error body: a proxy error says
-// why, and the reason is worth the log line.
-func bodySnippet(body []byte) string {
-	s := strings.TrimSpace(string(body))
-	if s == "" {
-		return ""
-	}
-	s = strings.ReplaceAll(s, "\n", " ")
-	if len(s) > 200 {
-		s = s[:200]
-	}
-	return ": " + s
 }
 
 // errText renders the wiki's error object as one line.

@@ -18,6 +18,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
+	"rouge_automaton/internal/docval"
 	"rouge_automaton/internal/wikifeed"
 	"rouge_automaton/internal/wikiparse"
 )
@@ -560,7 +561,7 @@ func (w *Watcher) Backfill(ctx context.Context) (int, error) {
 			if !strings.Contains(url, "/wiki/") {
 				continue
 			}
-			title := strings.TrimSpace(toString(doc["wiki_title"]))
+			title := strings.TrimSpace(docval.Value(doc["wiki_title"]))
 			if title == "" {
 				title = titleFromURL(url)
 			}
@@ -681,9 +682,9 @@ func cut(s string, n int) string {
 
 // unitBlob mirrors the Python crawler's text_blob join for units.
 func unitBlob(cur bson.M, extract string, tactics []string) string {
-	aliases := strListOf(cur, "aliases")
-	weak := strListOf(cur, "weak_points")
-	counters := strListOf(cur, "counters")
+	aliases := docval.List(cur, "aliases")
+	weak := docval.List(cur, "weak_points")
+	counters := docval.List(cur, "counters")
 	faction, _ := cur["faction"].(string)
 	role, _ := cur["role"].(string)
 	return strings.Join([]string{
@@ -691,25 +692,4 @@ func unitBlob(cur bson.M, extract string, tactics []string) string {
 		strings.Join(weak, " "), strings.Join(counters, " "),
 		strings.Join(tactics, " "), cut(extract, 1500),
 	}, " | ")
-}
-
-func strListOf(doc bson.M, key string) []string {
-	if doc == nil {
-		return nil
-	}
-	switch v := doc[key].(type) {
-	case bson.A:
-		var out []string
-		for _, e := range v {
-			if s, ok := e.(string); ok {
-				out = append(out, s)
-			}
-		}
-		return out
-	case []string:
-		return v
-	case string:
-		return []string{v}
-	}
-	return nil
 }

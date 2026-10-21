@@ -16,6 +16,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"rouge_automaton/internal/httpx"
 )
 
 // DefaultBase is the catalog API root.
@@ -255,7 +257,7 @@ func (c *Client) Fetch(ctx context.Context, coll, etag string) (FetchResult, err
 		return FetchResult{}, fmt.Errorf("catalog %s: payload is over the %d byte cap", coll, maxBodyBytes)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return FetchResult{}, fmt.Errorf("catalog %s status %d%s", coll, resp.StatusCode, bodySnippet(body))
+		return FetchResult{}, fmt.Errorf("catalog %s status %d%s", coll, resp.StatusCode, httpx.BodySuffix(body))
 	}
 	snap, err := Parse(body)
 	if err != nil {
@@ -267,20 +269,6 @@ func (c *Client) Fetch(ctx context.Context, coll, etag string) (FetchResult, err
 		newETag = etag
 	}
 	return FetchResult{Snapshot: snap, ETag: newETag}, nil
-}
-
-// bodySnippet keeps a short piece of an error body: a proxy error says
-// why, and the reason is worth the log line.
-func bodySnippet(body []byte) string {
-	s := strings.TrimSpace(string(body))
-	if s == "" {
-		return ""
-	}
-	s = strings.ReplaceAll(s, "\n", " ")
-	if len(s) > 200 {
-		s = s[:200]
-	}
-	return ": " + s
 }
 
 // normalize folds a name for matching: lower case, trimmed, underscores and
