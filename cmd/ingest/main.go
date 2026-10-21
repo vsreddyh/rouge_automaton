@@ -319,8 +319,8 @@ func run(mongoURI, dataDir string) error {
 	// not the correctness boundary.
 	cleared, err := db.Collection("structures").UpdateMany(ctx,
 		bson.M{
-			"role": bson.M{"$exists": true},
-			"note": bson.M{"$exists": true},
+			"role": bson.M{"$exists": true, "$type": "string"},
+			"note": bson.M{"$exists": true, "$type": "string"},
 			"$expr": bson.M{"$eq": []any{
 				bson.M{"$toLower": bson.M{"$trim": bson.M{"input": "$role"}}},
 				bson.M{"$toLower": bson.M{"$trim": bson.M{"input": "$note"}}},
