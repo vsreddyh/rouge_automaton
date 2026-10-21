@@ -47,17 +47,24 @@ type CrawlResult struct {
 // and a refreshed doc look identical, and the curated seed fields survive.
 func (w *Watcher) Crawl(ctx context.Context) ([]CrawlResult, error) {
 	results := []CrawlResult{}
+	// The cap counts the pages fetched across the whole crawl, not per
+	// shelf: it is a cap on wiki traffic.
+	fetched := 0
 	for _, shelf := range CrawlShelves {
 		res := CrawlResult{Shelf: shelf}
 		docs, err := w.shelfDocs(ctx, shelf)
 		if err != nil {
-			return results, err
+			// One unreadable shelf must not cost the rest of the crawl.
+			res.Failed++
+			log.Printf("watch: crawl %s: %v", shelf, err)
+			results = append(results, res)
+			continue
 		}
-		fetched := 0
 		for _, doc := range docs {
 			if w.CrawlLimit > 0 && fetched >= w.CrawlLimit {
-				log.Printf("watch: crawl %s stopped at the %d page cap", shelf, w.CrawlLimit)
-				break
+				log.Printf("watch: crawl stopped at the %d page cap", w.CrawlLimit)
+				results = append(results, res)
+				return results, nil
 			}
 			title := w.docTitle(doc)
 			if title == "" {

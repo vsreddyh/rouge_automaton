@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"sort"
+	"strings"
 	"time"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -142,6 +143,8 @@ func Sync(ctx context.Context, opts Options) ([]Result, error) {
 					failed++
 					break
 				}
+				// The payload came down: this was not a free 304.
+				f.NotModified = false
 				snaps[coll] = res2.Snapshot
 				f.Count = res2.Snapshot.Count()
 				if err := cache.Save(ctx, coll, res2.Snapshot, res2.ETag); err != nil {
@@ -200,6 +203,9 @@ func Sync(ctx context.Context, opts Options) ([]Result, error) {
 		res.Updated, res.Unchanged, res.New, res.Removed, res.Mismatches = st.updated, st.unchanged, st.new, st.removed, st.mismatches
 		res.Failed = st.failed
 		if err != nil {
+			// The shelf failed: report it instead of dropping the line.
+			res.Err = err.Error()
+			results = append(results, res)
 			return results, err
 		}
 		results = append(results, res)
@@ -383,6 +389,12 @@ func applyShelf(ctx context.Context, db *mongo.Database, shelf string, items []I
 	}
 	seen := map[string]bool{}
 	for _, it := range items {
+		if strings.TrimSpace(it.Name) == "" {
+			// A nameless item would land as a doc with an empty name.
+			st.failed++
+			log.Printf("catalog: %s: skipping an item with no name", shelf)
+			continue
+		}
 		set := catalogFields(it, info, version, now)
 		// The armor and booster shelves have no catalog category of their
 		// own; name the shelf so the roster can still say what a doc is.
@@ -483,7 +495,9 @@ func docKey(doc bson.M) string {
 	return fmt.Sprint(doc["_id"])
 }
 
-// loadShelf reads every doc of a shelf.
+// loadShelf reads every doc of a shelf, sorted by name: the alias index
+// resolves the first match, and an unsorted read would make that pick
+// random.
 func loadShelf(ctx context.Context, db *mongo.Database, shelf string) ([]bson.M, error) {
 	cur, err := db.Collection(shelf).Find(ctx, bson.M{})
 	if err != nil {
@@ -494,6 +508,9 @@ func loadShelf(ctx context.Context, db *mongo.Database, shelf string) ([]bson.M,
 	if err := cur.All(ctx, &docs); err != nil {
 		return nil, fmt.Errorf("catalog load %s: %w", shelf, err)
 	}
+	sort.Slice(docs, func(i, j int) bool {
+		return toString(docs[i]["name"]) < toString(docs[j]["name"])
+	})
 	return docs, nil
 }
 

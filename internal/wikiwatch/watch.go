@@ -65,7 +65,10 @@ type Watcher struct {
 	// spend a wiki request on every poll for nothing.
 	ignored      map[string]bool
 	ignoredOrder []string
-	lastLM       string
+	// lastLM is the feed validator the next poll sends. It is only
+	// advanced once a poll has been carried out.
+	lastLM string
+	nextLM string
 }
 
 // New builds a watcher with sensible feed defaults.
@@ -139,9 +142,10 @@ func (w *Watcher) Poll(ctx context.Context) ([]Change, error) {
 	if err != nil {
 		return nil, err
 	}
-	if lm != "" {
-		w.lastLM = lm
-	}
+	// The validator is only kept once the poll has been carried out:
+	// advancing it on a failed run would ask the wiki for changes since
+	// a point the watcher never processed.
+	w.nextLM = lm
 	var changes []Change
 	tracked := map[string]Tracked{}
 	var order []string
@@ -309,14 +313,20 @@ func (w *Watcher) Refresh(ctx context.Context, ch Change) error {
 	var cur bson.M
 	err = w.DB.Collection(coll).FindOne(ctx, filter).Decode(&cur)
 	if err != nil {
+		if !errors.Is(err, mongo.ErrNoDocuments) {
+			return err
+		}
 		// Fall back to name match for docs seeded before the first crawl.
 		// The match is case-insensitive, the way the name indexes are.
 		filter = bson.M{"name": title}
 		cur = nil
 		if err := w.DB.Collection(coll).FindOne(ctx, filter,
 			options.FindOne().SetCollation(ciCollation)).Decode(&cur); err != nil {
-			log.Printf("watch: no doc for %s (%s)", title, coll)
-			return nil
+			if errors.Is(err, mongo.ErrNoDocuments) {
+				log.Printf("watch: no doc for %s (%s)", title, coll)
+				return nil
+			}
+			return err
 		}
 	}
 	set := w.buildFields(coll, page, cur, sourceURL)
@@ -590,6 +600,10 @@ func (w *Watcher) RunOnce(ctx context.Context) (int, error) {
 		log.Printf("watch: discover: %v", err)
 	} else if n > 0 {
 		log.Printf("watch: placed %d new page(s)", n)
+	}
+	// The poll is done: the feed validator can move on.
+	if w.nextLM != "" {
+		w.lastLM = w.nextLM
 	}
 	return len(changes), nil
 }

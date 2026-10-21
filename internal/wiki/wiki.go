@@ -143,12 +143,15 @@ func (c *Client) get(ctx context.Context, params url.Values) (map[string]any, er
 		return nil, err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("wiki status %d", resp.StatusCode)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes))
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("wiki status %d%s", resp.StatusCode, bodySnippet(body))
 	}
 	var out map[string]any
-	// A wiki page can be huge; the bot must not OOM on one response.
-	if err := json.NewDecoder(io.LimitReader(resp.Body, maxBodyBytes)).Decode(&out); err != nil {
+	if err := json.Unmarshal(body, &out); err != nil {
 		return nil, err
 	}
 	// MediaWiki answers 200 with an error object when it refuses the
@@ -157,6 +160,20 @@ func (c *Client) get(ctx context.Context, params url.Values) (map[string]any, er
 		return nil, fmt.Errorf("wiki api error: %s", errText(apiErr))
 	}
 	return out, nil
+}
+
+// bodySnippet keeps a short piece of an error body: a proxy error says
+// why, and the reason is worth the log line.
+func bodySnippet(body []byte) string {
+	s := strings.TrimSpace(string(body))
+	if s == "" {
+		return ""
+	}
+	s = strings.ReplaceAll(s, "\n", " ")
+	if len(s) > 200 {
+		s = s[:200]
+	}
+	return ": " + s
 }
 
 // errText renders the wiki's error object as one line.

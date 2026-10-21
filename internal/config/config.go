@@ -138,5 +138,5 @@ func DBNameFromURI(uri string) string {
 	if err != nil || u.Path == "" || u.Path == "/" {
 		return "rouge"
 	}
-	return strings.TrimPrefix(u.Path, "/")
+	return strings.Trim(strings.TrimPrefix(u.Path, "/"), "/")
 }

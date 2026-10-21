@@ -117,7 +117,10 @@ func (w *Watcher) Discover(ctx context.Context) (int, error) {
 		attempts++
 		ok, err := w.discoverOne(ctx, title, index)
 		if err != nil {
+			// A transient failure must not lose the page: it is put back
+			// on the queue for the next poll.
 			log.Printf("watch: discover %s: %v", title, err)
+			w.requeue([]string{title})
 			continue
 		}
 		if ok {
@@ -134,7 +137,7 @@ func (w *Watcher) Discover(ctx context.Context) (int, error) {
 // queue, minus the ones already known to match no shelf.
 func (w *Watcher) requeue(titles []string) {
 	for _, t := range titles {
-		if w.ignored[t] {
+		if w.ignored[t] || contains(w.untracked, t) {
 			continue
 		}
 		w.untracked = append(w.untracked, t)
@@ -184,7 +187,13 @@ func (w *Watcher) shelfForDoc(ctx context.Context, title string) (string, bool) 
 		count, err := w.DB.Collection(shelf).CountDocuments(ctx,
 			bson.M{"name": title},
 			options.Count().SetLimit(1).SetCollation(ciCollation))
-		if err == nil && count > 0 {
+		if err != nil {
+			// The store is unreachable: do not read that as "not on a
+			// shelf", that would spend a wiki request on a guess.
+			log.Printf("watch: shelf lookup %s %s: %v", shelf, title, err)
+			return "", false
+		}
+		if count > 0 {
 			return shelf, true
 		}
 	}

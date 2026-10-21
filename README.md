@@ -57,25 +57,35 @@ podman build --network=host -f ContainerfileGo -t rouge-automaton-go .
 podman-compose -f podman-compose.go.yml up -d
 ```
 
-Green-field Mongo is empty on first boot — seed it once:
+The compose file runs every service with host networking, so `MONGO_URI` must
+point at `127.0.0.1`, not at the `mongo` service name. The `mongo-data`
+volume is marked external: on a green-field host create it first
+(`podman volume create rouge-mongo-data`).
+
+Green-field Mongo is empty on first boot — seed it once. The image's
+entrypoint is the bot, so a one-shot command needs `--entrypoint`:
 
 ```bash
-podman run --rm --network=host -e MONGO_URI=mongodb://127.0.0.1:27017/rouge \
-  localhost/rouge-automaton-go:latest /ingest
+podman run --rm --network=host --entrypoint /ingest \
+  -v $PWD/skills:/app/skills \
+  -e MONGO_URI=mongodb://127.0.0.1:27017/rouge \
+  localhost/rouge-automaton-go:latest
 ```
 
 Then let the store fill itself in (both are safe to re-run):
 
 ```bash
 # gear from the catalog API (no wiki traffic at all)
-podman run --rm --network=host -e MONGO_URI=mongodb://127.0.0.1:27017/rouge \
-  localhost/rouge-automaton-go:latest /catalog --once
+podman run --rm --network=host --entrypoint /catalog \
+  -e MONGO_URI=mongodb://127.0.0.1:27017/rouge \
+  localhost/rouge-automaton-go:latest --once
 # units and world from the wiki, one page per shelf member
-podman run --rm --network=host -e MONGO_URI=mongodb://127.0.0.1:27017/rouge \
-  localhost/rouge-automaton-go:latest /crawl --once
+podman run --rm --network=host --entrypoint /crawl \
+  -e MONGO_URI=mongodb://127.0.0.1:27017/rouge \
+  localhost/rouge-automaton-go:latest --once
 ```
 
-`.env` keys used: `DISCORD_BOT_TOKEN`, `DISCORD_ALLOWED_USERS` (also `DISCORD_ALLOW_ALL_USERS`, `DISCORD_FREE_RESPONSE_CHANNELS`), `OPENCODE_GO_API_KEY`, `OPENCODE_GO_BASE_URL`, `MODEL`, `MONGO_URI`, `X_SUPER_CLIENT`, `X_SUPER_CONTACT`, `WIKI_USER_AGENT`.
+`.env` keys used: `DISCORD_BOT_TOKEN`, `DISCORD_ALLOWED_USERS` (also `DISCORD_ALLOW_ALL_USERS`, `DISCORD_FREE_RESPONSE_CHANNELS`), `OPENCODE_GO_API_KEY`, `OPENCODE_GO_BASE_URL`, `MODEL`, `MONGO_URI`, `X_SUPER_CLIENT`, `X_SUPER_CONTACT`, `WIKI_USER_AGENT` (and `CATALOG_USER_AGENT`, optional).
 
 ## Discord behavior
 
