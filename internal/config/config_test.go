@@ -10,7 +10,8 @@ func TestDefaults(t *testing.T) {
 	for _, k := range []string{"DISCORD_FREE_RESPONSE_CHANNELS", "DISCORD_ALLOWED_USERS",
 		"DISCORD_ALLOW_ALL_USERS", "MONGO_URI", "MODEL", "OPENCODE_GO_BASE_URL",
 		"OPENCODE_GO_API_KEY", "DISCORD_BOT_TOKEN", "HD2_API_BASE",
-		"X_SUPER_CLIENT", "X_SUPER_CONTACT", "WIKI_USER_AGENT"} {
+		"X_SUPER_CLIENT", "X_SUPER_CONTACT", "WIKI_USER_AGENT",
+		"LOCAL_BACKDOOR_TOKEN", "LOCAL_BACKDOOR_ADDR"} {
 		t.Setenv(k, "")
 	}
 	// Empty is set-but-empty: must be honored, not replaced by defaults.
@@ -18,9 +19,15 @@ func TestDefaults(t *testing.T) {
 	if len(c.FreeResponseChannels) != 0 {
 		t.Fatalf("empty channels must stay empty, got %v", c.FreeResponseChannels)
 	}
+	if c.LocalBackdoorToken != "" {
+		t.Fatalf("empty backdoor token must stay empty, got %q", c.LocalBackdoorToken)
+	}
+	if c.LocalBackdoorAddr != "" {
+		t.Fatalf("empty backdoor addr must stay empty, got %q", c.LocalBackdoorAddr)
+	}
 	for _, k := range []string{"DISCORD_FREE_RESPONSE_CHANNELS", "MONGO_URI", "MODEL",
 		"OPENCODE_GO_BASE_URL", "HD2_API_BASE", "X_SUPER_CLIENT", "X_SUPER_CONTACT",
-		"WIKI_USER_AGENT"} {
+		"WIKI_USER_AGENT", "LOCAL_BACKDOOR_ADDR"} {
 		os.Unsetenv(k)
 	}
 	c = Load()
@@ -38,6 +45,12 @@ func TestDefaults(t *testing.T) {
 	}
 	if len(c.FreeResponseChannels) != 1 {
 		t.Fatalf("default free channels = %v", c.FreeResponseChannels)
+	}
+	if c.LocalBackdoorToken != "" {
+		t.Fatalf("default backdoor token must be empty (door disabled), got %q", c.LocalBackdoorToken)
+	}
+	if c.LocalBackdoorAddr != "127.0.0.1:8099" {
+		t.Fatalf("default backdoor addr = %q", c.LocalBackdoorAddr)
 	}
 }
 

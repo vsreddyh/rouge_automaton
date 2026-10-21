@@ -275,6 +275,69 @@ func (b *Bot) sendReply(s *discordgo.Session, m *discordgo.MessageCreate, ch *di
 	}
 }
 
+// statusAnswer resolves /status through the per-caller cache: a fresh cache
+// hit returns with no new probe, otherwise one live probe pair runs under a
+// 15s budget and the answer is cached (with a stale sweep on write). Shared
+// by the gateway path and the local test door so both report identically.
+func (b *Bot) statusAnswer(ctx context.Context, userID string, freeChannel bool) string {
+	b.statusMu.Lock()
+	cached, hit := statusCached(b.statusCache, userID, time.Now())
+	b.statusMu.Unlock()
+	if hit {
+		return cached
+	}
+	pctx, pcancel := context.WithTimeout(ctx, 15*time.Second)
+	defer pcancel()
+	reply := cutRunes(statusReply(b, b.Boot, userID, freeChannel, b.Limiter, pctx), 2000)
+	b.statusMu.Lock()
+	if b.statusCache == nil {
+		b.statusCache = map[string]cachedStatus{}
+	}
+	b.statusCache[userID] = cachedStatus{at: time.Now(), text: reply}
+	// Sweep stale entries on write; the cache is bounded by allowlist
+	// size in practice, this keeps idlers from lingering forever.
+	for id, c := range b.statusCache {
+		if time.Since(c.at) > statusCacheTTL {
+			delete(b.statusCache, id)
+		}
+	}
+	b.statusMu.Unlock()
+	return reply
+}
+
+// execFunc adapts the tool executor to the relay's exec seam: a nil Tools
+// (Bot not built via New) yields nil so an unexpected tool call resolves to
+// Dead inside ChatWithTools instead of panicking.
+func (b *Bot) execFunc() func(ctx context.Context, name, args string) string {
+	if b.Tools == nil {
+		return nil
+	}
+	return b.Tools.Execute
+}
+
+// modelAnswer runs the think-act turn and shapes the reply exactly as
+// Discord delivery would: bound at 1900 runes with the truncation trailer,
+// persona sign-off, then the 2000-rune Discord cut. Shared by the gateway
+// path and the local test door so curl sees what Discord would post.
+// A nil Relay resolves to Dead (shaped, never a panic).
+func (b *Bot) modelAnswer(ctx context.Context, q string, history []gorelay.Message, session string) string {
+	// No router and no pre-fetched context: the system prompt carries the
+	// persona plus tool procedure, and the model pulls whatever intel it
+	// needs through the think-act loop below. Every message — greetings
+	// included — is answered by the model; nothing is canned.
+	system := persona.PromptFor(q) + mcpdb.ToolGuidance
+	var raw string
+	if b.Relay == nil {
+		raw = gorelay.Dead
+	} else {
+		raw = b.Relay.ChatWithTools(ctx, system, q, history, session, mcpdb.ToolDefs(), b.execFunc())
+	}
+	// Bound before Postprocess so a long reply never amputates the
+	// sign-off and never spills past Discord's ceiling: truncation
+	// happens first, trailer + "Over." land intact.
+	return cutRunes(persona.Postprocess(boundModelReply(raw)), 2000)
+}
+
 func (b *Bot) onMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 	if m.Author == nil || m.Author.Bot || !b.Cfg.Allowed(m.Author.ID) {
 		return
@@ -316,30 +379,7 @@ func (b *Bot) onMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 	// when throttled. No auto-thread — it works outside threads and must
 	// not open one for a health check.
 	if isStatus(q) {
-		b.statusMu.Lock()
-		cached, hit := statusCached(b.statusCache, m.Author.ID, time.Now())
-		b.statusMu.Unlock()
-		if hit {
-			b.sendReply(s, m, ch, m.ChannelID, cached)
-			return
-		}
-		pctx, pcancel := context.WithTimeout(context.Background(), 15*time.Second)
-		defer pcancel()
-		reply := cutRunes(statusReply(b, b.Boot, m.Author.ID, free, b.Limiter, pctx), 2000)
-		b.statusMu.Lock()
-		if b.statusCache == nil {
-			b.statusCache = map[string]cachedStatus{}
-		}
-		b.statusCache[m.Author.ID] = cachedStatus{at: time.Now(), text: reply}
-		// Sweep stale entries on write; the cache is bounded by allowlist
-		// size in practice, this keeps idlers from lingering forever.
-		for id, c := range b.statusCache {
-			if time.Since(c.at) > statusCacheTTL {
-				delete(b.statusCache, id)
-			}
-		}
-		b.statusMu.Unlock()
-		b.sendReply(s, m, ch, m.ChannelID, reply)
+		b.sendReply(s, m, ch, m.ChannelID, b.statusAnswer(context.Background(), m.Author.ID, free))
 		return
 	}
 	// Client-side guard before any model spend. Key is the caller ID so
@@ -398,13 +438,9 @@ func (b *Bot) onMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 	// persona plus tool procedure, and the model pulls whatever intel it
 	// needs through the think-act loop below. Every message — greetings
 	// included — is answered by the model; nothing is canned.
-	system := persona.PromptFor(q) + mcpdb.ToolGuidance
 	// The relay session follows the reply channel: a fresh thread gets its
 	// own session, and follow-ups inside it (ChannelID == thread ID) stay
 	// continuous with the answer that opened it.
-	// Bound before Postprocess so a long reply never amputates the
-	// sign-off and never spills past Discord's ceiling: truncation
-	// happens first, trailer + "Over." land intact.
-	reply := persona.Postprocess(boundModelReply(b.Relay.ChatWithTools(ctx, system, q, history, replyChannel, mcpdb.ToolDefs(), b.Tools.Execute)))
+	reply := b.modelAnswer(ctx, q, history, replyChannel)
 	b.sendReply(s, m, ch, replyChannel, reply)
 }

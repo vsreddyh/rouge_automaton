@@ -85,7 +85,7 @@ podman run --rm --network=host --entrypoint /crawl \
   localhost/rouge-automaton-go:latest --once
 ```
 
-`.env` keys used: `DISCORD_BOT_TOKEN`, `DISCORD_ALLOWED_USERS` (also `DISCORD_ALLOW_ALL_USERS`, `DISCORD_FREE_RESPONSE_CHANNELS`), `OPENCODE_GO_API_KEY`, `OPENCODE_GO_BASE_URL`, `MODEL`, `MONGO_URI`, `X_SUPER_CLIENT`, `X_SUPER_CONTACT`, `WIKI_USER_AGENT` (and `CATALOG_USER_AGENT`, optional).
+`.env` keys used: `DISCORD_BOT_TOKEN`, `DISCORD_ALLOWED_USERS` (also `DISCORD_ALLOW_ALL_USERS`, `DISCORD_FREE_RESPONSE_CHANNELS`), `OPENCODE_GO_API_KEY`, `OPENCODE_GO_BASE_URL`, `MODEL`, `MONGO_URI`, `X_SUPER_CLIENT`, `X_SUPER_CONTACT`, `WIKI_USER_AGENT` (and `CATALOG_USER_AGENT`, optional), `LOCAL_BACKDOOR_TOKEN` + `LOCAL_BACKDOOR_ADDR` (local test door, optional).
 
 ## Discord behavior
 
@@ -147,6 +147,36 @@ Seeds are the floor, the crawl is the ceiling: `cmd/ingest` seeds every shelf wi
 - **Answers cite their source**: every intel answer names the wiki
   page (or live API) it came from, so the attribution reaches the
   reader.
+
+## Local test door
+
+Testing a conversation needs no Discord keyboard: with `LOCAL_BACKDOOR_TOKEN`
+set (non-empty bearer, kept in untracked `.env`), the bot binary also serves
+`POST /converse` on loopback (default `127.0.0.1:8099`, override via
+`LOCAL_BACKDOOR_ADDR`). It replays the same answer path the gateway runs —
+cheap commands, allowlist, rate gate, think-act loop, truncation + sign-off —
+so curl sees the shapes Discord delivery would. The door sends nothing and
+opens no threads, so it can never double-reply or spam the server. With the
+token unset no listener starts; a non-loopback addr refuses to boot.
+
+```bash
+export LOCAL_BACKDOOR_TOKEN=...  # same value as in .env
+# Greeting (model in voice, sign-off intact):
+curl -s 127.0.0.1:8099/converse \
+  -H "Authorization: Bearer $LOCAL_BACKDOOR_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"text":"hi","user":"<discord-user-id>"}'
+# War status (live fronts, no planet required):
+curl -s 127.0.0.1:8099/converse \
+  -H "Authorization: Bearer $LOCAL_BACKDOOR_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"text":"how goes the war?","user":"<discord-user-id>","session":"run-7"}'
+# Follow-up in the same session (relay continuity via local:run-7):
+curl -s 127.0.0.1:8099/converse \
+  -H "Authorization: Bearer $LOCAL_BACKDOOR_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"text":"what about the unreleased gear?","user":"<discord-user-id>","session":"run-7"}'
+```
 
 ## Troubleshooting
 
