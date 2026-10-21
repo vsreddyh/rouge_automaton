@@ -5,6 +5,7 @@ Lightweight Go Discord bot for Helldivers 2 intel, roleplayed as a defected info
 ## What it does
 
 - Answers Helldivers 2 intel questions: unit weak points, counters, loadouts, tactics, faction lore, plus biome/planet/mission context and live war status.
+- Seeded intel in MongoDB covers units, structures, gear (weapons, stratagems, armor, boosters) and world (biomes, planets, missions, difficulty, effects), so exact lookups hit before the wiki crawl lands.
 - Full wiki coverage (units, structures, weapons, stratagems, armor, boosters, biomes, planets, missions) cached in MongoDB and refreshed from the wiki RecentChanges feed.
 - Persona: ex–Super Citizen / Helldiver, captured on Cyberstan, experimented on, escaped into a bot husk. Controlled cold rage, addresses you as "Helldiver", ends transmissions with `Over.`
 - Serial is always `[REDACTED]`. Never invents a name. Never claims to be AI. Never sympathizes with Automatons.
@@ -33,6 +34,9 @@ internal/
 skills/rouge-automaton/
   SOUL.md           # identity / voice / radio procedure (embedded in binary)
   data/             # seed intel (authoritative seeds, wiki enriches in Mongo)
+                    #   automatons|terminids|illuminate.json — units + structures
+                    #   gear.json — weapons, stratagems, armor, boosters
+                    #   world.json — biomes, planets, missions, difficulty, effects
 ContainerfileGo     # multi-stage static build → distroless (~30–45MB)
 podman-compose.go.yml # bot-go + watcher-go + mongo (Podman only, no Docker)
 .env.example        # DISCORD_BOT_TOKEN, DISCORD_ALLOWED_USERS, OPENCODE_GO_API_KEY, ...
@@ -88,6 +92,8 @@ Doctrine reminders: flank Hulk/Tank rear vents, Flare Trooper first, objectives 
 ## Freshness
 
 The `watcher-go` service polls the wiki RecentChanges Atom feed every 5 minutes, diffs revision ids against Mongo `tracked_pages`, and re-parses only changed pages (curated seed fields are preserved). Wiki `robots.txt` allows reference/RAG use (`use=reference`); the poller identifies itself and honors `If-Modified-Since`/`Retry-After`.
+
+Seeds are the floor, the crawl is the ceiling: `cmd/ingest` seeds every shelf with `$setOnInsert`, so a green-field Mongo answers exact gear and place lookups immediately, and a crawled doc only ever enriches the fields the seed left to it.
 
 ## Troubleshooting
 

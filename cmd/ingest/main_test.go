@@ -1,0 +1,193 @@
+package main
+
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"go.mongodb.org/mongo-driver/v2/bson"
+)
+
+// TestDocSeedUnmarshal pins the free-form seed contract: name and aliases
+// are lifted out, everything else becomes the doc body, and nested objects
+// become BSON documents rather than opaque blobs.
+func TestDocSeedUnmarshal(t *testing.T) {
+	var d docSeed
+	raw := `{
+		"name": "  Orbital Railcannon Strike ",
+		"aliases": ["Orbital Railcannon", 42],
+		"role": "Support stratagem.",
+		"params": {"damage": "230", "cooldown": "60 s"},
+		"counters": ["one-shots a Hulk", "aim at the ground"]
+	}`
+	if err := json.Unmarshal([]byte(raw), &d); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if d.Name != "Orbital Railcannon Strike" {
+		t.Errorf("name = %q, want trimmed", d.Name)
+	}
+	if len(d.Aliases) != 2 || d.Aliases[0] != "Orbital Railcannon" {
+		t.Errorf("aliases = %v, want the string and the coerced number", d.Aliases)
+	}
+	if d.Aliases[1] != "42" {
+		t.Errorf("alias 1 = %q, want the coerced number 42", d.Aliases[1])
+	}
+	if _, ok := d.Fields["name"]; ok {
+		t.Error("name must not stay in the field bag")
+	}
+	if _, ok := d.Fields["aliases"]; ok {
+		t.Error("aliases must not stay in the field bag")
+	}
+	params, ok := d.Fields["params"].(bson.M)
+	if !ok {
+		t.Fatalf("params = %T, want bson.M", d.Fields["params"])
+	}
+	if params["damage"] != "230" {
+		t.Errorf("params.damage = %v, want 230", params["damage"])
+	}
+	counters, ok := d.Fields["counters"].(bson.A)
+	if !ok {
+		t.Fatalf("counters = %T, want bson.A", d.Fields["counters"])
+	}
+	if len(counters) != 2 || counters[0] != "one-shots a Hulk" {
+		t.Errorf("counters = %v, want the two bullets", counters)
+	}
+}
+
+// TestDocSeedNoName: a seed without a name is skipped by the ingest, so
+// the parsed doc must be empty rather than half-populated.
+func TestDocSeedNoName(t *testing.T) {
+	var d docSeed
+	if err := json.Unmarshal([]byte(`{"role": "no name here"}`), &d); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if d.Name != "" {
+		t.Errorf("name = %q, want empty", d.Name)
+	}
+	if len(d.Aliases) != 0 {
+		t.Errorf("aliases = %v, want empty", d.Aliases)
+	}
+}
+
+// TestBsonifyNested pins the recursive conversion of nested seed objects.
+func TestBsonifyNested(t *testing.T) {
+	in := map[string]any{
+		"flat": "value",
+		"obj":  map[string]any{"inner": map[string]any{"deep": "1"}},
+		"arr":  []any{"a", map[string]any{"b": "c"}},
+	}
+	out := bsonify(in)
+	if out["flat"] != "value" {
+		t.Errorf("flat = %v, want value", out["flat"])
+	}
+	obj, ok := out["obj"].(bson.M)
+	if !ok {
+		t.Fatalf("obj = %T, want bson.M", out["obj"])
+	}
+	if _, ok := obj["inner"].(bson.M); !ok {
+		t.Errorf("inner = %T, want bson.M", obj["inner"])
+	}
+	arr, ok := out["arr"].(bson.A)
+	if !ok {
+		t.Fatalf("arr = %T, want bson.A", out["arr"])
+	}
+	if _, ok := arr[1].(bson.M); !ok {
+		t.Errorf("arr[1] = %T, want bson.M", arr[1])
+	}
+}
+
+// TestCovered pins the coverage rule: a combined "A / B" name is covered
+// when a part exists as a standalone doc or alias. A doc never covers
+// itself — its own aliases must not make it redundant — and a slash inside
+// a designation is not a separator.
+func TestCovered(t *testing.T) {
+	known := map[string][]string{
+		"charger / behemoth": {"charger"},
+		"tundra":             {"snow"},
+		"ar/gl-21 one-two":   {"one two"},
+	}
+	cases := []struct {
+		seed string
+		want bool
+	}{
+		{"Charger / Behemoth", false}, // itself: re-upserted, never re-inserted
+		{"Tundra", false},              // itself
+		{"TUNDRA", false},              // itself, case-insensitively
+		{"Charger", true},              // alias of the combined doc
+		{"Behemoth", false},            // only the combined doc holds it
+		{"AR/GL-21 One-Two", false},    // itself: the slash is not a separator
+		{"Snow", true},                 // alias
+		{"Brand New Item", false},      // nothing known
+	}
+	for _, c := range cases {
+		if got := covered(known, c.seed); got != c.want {
+			t.Errorf("covered(%q) = %v, want %v", c.seed, got, c.want)
+		}
+	}
+	// A standalone doc makes the combined name redundant.
+	withStandalone := map[string][]string{"charger": nil}
+	if !covered(withStandalone, "Charger / Behemoth") {
+		t.Error("a combined name must be covered when a part exists standalone")
+	}
+}
+
+// TestSeedFiles pins the shipped seed data: every file parses, every gear
+// and world shelf is populated, names are unique per collection, and no
+// doc's alias is another doc's name (an alias that shadows a name would
+// make covered() skip that doc forever).
+func TestSeedFiles(t *testing.T) {
+	dir := filepath.Join("..", "..", "skills", "rouge-automaton", "data")
+	files, err := filepath.Glob(filepath.Join(dir, "*.json"))
+	if err != nil || len(files) == 0 {
+		t.Fatalf("no seed files in %s: %v", dir, err)
+	}
+	shelvesSeen := map[string]bool{}
+	for _, f := range files {
+		raw, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatalf("%s: %v", f, err)
+		}
+		var d dataFile
+		if err := json.Unmarshal(raw, &d); err != nil {
+			t.Fatalf("%s: %v", f, err)
+		}
+		for coll, docs := range d.shelves() {
+			if len(docs) == 0 {
+				continue
+			}
+			shelvesSeen[coll] = true
+			names := map[string]string{}
+			for _, doc := range docs {
+				if doc.Name == "" {
+					t.Errorf("%s: %s has a doc with no name", f, coll)
+					continue
+				}
+				key := strings.ToLower(doc.Name)
+				if prev, dup := names[key]; dup {
+					t.Errorf("%s: %s has duplicate names %q and %q", f, coll, prev, doc.Name)
+				}
+				names[key] = doc.Name
+			}
+			for _, doc := range docs {
+				for _, a := range doc.Aliases {
+					al := strings.ToLower(strings.TrimSpace(a))
+					if al == "" {
+						t.Errorf("%s: %s doc %q has an empty alias", f, coll, doc.Name)
+						continue
+					}
+					if other, clash := names[al]; clash {
+						t.Errorf("%s: %s doc %q aliases %q, which is doc %q",
+							f, coll, doc.Name, a, other)
+					}
+				}
+			}
+		}
+	}
+	for _, coll := range docCollections {
+		if !shelvesSeen[coll] {
+			t.Errorf("no seed file populates the %s shelf", coll)
+		}
+	}
+}

@@ -216,6 +216,26 @@ func TestFormatFull(t *testing.T) {
 	}
 }
 
+func TestFormatContextSegments(t *testing.T) {
+	// A gear or biome doc has no weak points: the roster line must drop
+	// the empty segment instead of rendering "weak  | counter X".
+	gear := bson.M{"name": "Orbital Railcannon Strike", "role": "Support stratagem",
+		"counters": bson.A{"one-shots a Hulk"}, "source": "data/gear.json"}
+	got := FormatContext([]bson.M{gear})
+	if strings.Contains(got, "weak") {
+		t.Fatalf("empty weak segment must be dropped, got %q", got)
+	}
+	if !strings.Contains(got, "counter one-shots a Hulk") {
+		t.Fatalf("counter segment must render, got %q", got)
+	}
+	// Unit docs keep both segments, in the established order.
+	unit := bson.M{"name": "Trooper", "weak_points": bson.A{"Head"}, "counters": bson.A{"AMR"}}
+	got = FormatContext([]bson.M{unit})
+	if !strings.Contains(got, "weak Head | counter AMR") {
+		t.Fatalf("unit roster line must keep both segments, got %q", got)
+	}
+}
+
 func TestClampLimit(t *testing.T) {
 	if got := clampLimit(0); got != defaultListLimit {
 		t.Fatalf("zero must default, got %d", got)
