@@ -310,15 +310,18 @@ func (w *Watcher) Refresh(ctx context.Context, ch Change) error {
 	err = w.DB.Collection(coll).FindOne(ctx, filter).Decode(&cur)
 	if err != nil {
 		// Fall back to name match for docs seeded before the first crawl.
+		// The match is case-insensitive, the way the name indexes are.
 		filter = bson.M{"name": title}
 		cur = nil
-		if err := w.DB.Collection(coll).FindOne(ctx, filter).Decode(&cur); err != nil {
+		if err := w.DB.Collection(coll).FindOne(ctx, filter,
+			options.FindOne().SetCollation(ciCollation)).Decode(&cur); err != nil {
 			log.Printf("watch: no doc for %s (%s)", title, coll)
 			return nil
 		}
 	}
 	set := w.buildFields(coll, page, cur, sourceURL)
-	if _, err := w.DB.Collection(coll).UpdateOne(ctx, filter, bson.M{"$set": set}); err != nil {
+	if _, err := w.DB.Collection(coll).UpdateOne(ctx, filter, bson.M{"$set": set},
+		options.UpdateOne().SetCollation(ciCollation)); err != nil {
 		return err
 	}
 	_, err = w.DB.Collection("tracked_pages").UpdateOne(ctx,

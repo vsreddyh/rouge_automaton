@@ -63,14 +63,16 @@ func (w *Watcher) Crawl(ctx context.Context) ([]CrawlResult, error) {
 			if title == "" {
 				continue
 			}
+			// The cap counts attempts, not successes: a wiki that keeps
+			// failing is exactly when the crawl must stop asking.
+			fetched++
+			res.Pages++
 			page, err := w.Feed.Page(ctx, title)
 			if err != nil {
 				res.Failed++
 				log.Printf("watch: crawl %s %s: %v", shelf, title, err)
 				continue
 			}
-			fetched++
-			res.Pages++
 			if w.CrawlDelay > 0 {
 				select {
 				case <-ctx.Done():

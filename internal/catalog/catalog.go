@@ -256,6 +256,11 @@ func (c *Client) Fetch(ctx context.Context, coll, etag string) (FetchResult, err
 	if err != nil {
 		return FetchResult{}, err
 	}
+	// A 200 without an ETag: keep the validator we sent, so the next
+	// poll can still ask "is this the same snapshot?".
+	if newETag == "" {
+		newETag = etag
+	}
 	return FetchResult{Snapshot: snap, ETag: newETag}, nil
 }
 

@@ -573,7 +573,7 @@ func Slug(title string) string {
 func PagePath(title string) string {
 	parts := strings.Split(title, "/")
 	for i, p := range parts {
-		parts[i] = url.PathEscape(strings.ReplaceAll(p, " ", "_"))
+		parts[i] = url.PathEscape(Slug(p))
 	}
 	return strings.Join(parts, "/")
 }
