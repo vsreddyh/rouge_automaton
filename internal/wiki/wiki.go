@@ -34,6 +34,19 @@ func cutRunes(s string, n int) string {
 	return s
 }
 
+// cutQuery caps a question at n runes without leaving a half word
+// behind: a truncated word would waste a title candidate.
+func cutQuery(s string, n int) string {
+	if len([]rune(s)) <= n {
+		return s
+	}
+	cut := cutRunes(s, n)
+	if i := strings.LastIndex(cut, " "); i > 0 {
+		return cut[:i]
+	}
+	return cut
+}
+
 // Stage names where a wiki lookup stopped.
 type Stage string
 
@@ -158,7 +171,7 @@ const maxRedirectHops = 5
 // StageExtractEmpty (the page resolved but carries no text). Ops read
 // the stage from the logs; the caller reads it from the Result.
 func (c *Client) Lookup(ctx context.Context, query string) Result {
-	q := cutRunes(normalizeQuery(query), maxQueryRunes)
+	q := cutQuery(normalizeQuery(query), maxQueryRunes)
 	if q == "" {
 		return Result{Stage: StageSearchMiss}
 	}

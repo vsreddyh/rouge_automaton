@@ -229,6 +229,17 @@ func TestLookupCapsQuery(t *testing.T) {
 	}
 }
 
+func TestCutQueryKeepsWords(t *testing.T) {
+	// A capped question must not end in half a word.
+	got := cutQuery(strings.Repeat("automatons ", 100), 50)
+	if strings.HasSuffix(got, "automat") {
+		t.Fatalf("cutQuery left a half word: %q", got)
+	}
+	if len([]rune(got)) > 50 {
+		t.Fatalf("cutQuery = %d runes, want at most 50", len([]rune(got)))
+	}
+}
+
 func TestLookupEmptyExtract(t *testing.T) {
 	c := serve(t, fakeWiki{pages: map[string]string{"Tundra": ""}})
 	res := c.Lookup(context.Background(), "Tundra")
