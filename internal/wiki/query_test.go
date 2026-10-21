@@ -199,7 +199,9 @@ func TestShapeDedupeSpelling(t *testing.T) {
 		want []string
 	}{
 		{"Automatons?", []string{"Automatons?"}},
-		{"“Hulk Bruiser”", []string{"“Hulk Bruiser”"}},
+		// The quoted spelling and the plain one are one request; the
+		// shorter runs are still their own.
+		{"“Hulk Bruiser”", []string{"“Hulk Bruiser”", "Bruiser", "Hulk"}},
 	} {
 		_, searches := shape(tc.q)
 		if !equalStrings(searches, tc.want) {
