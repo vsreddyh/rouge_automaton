@@ -416,14 +416,14 @@ func applyShelf(ctx context.Context, db *mongo.Database, shelf string, items []I
 			st.new++
 			continue
 		}
-		seen[doc["_id"]] = true
+		seen[(*doc)["_id"]] = true
 		mismatch := diffCurated(*doc, it)
 		if len(mismatch) > 0 {
 			set["catalog_mismatches"] = mismatch
 			st.mismatches++
 		}
 		res, err := db.Collection(shelf).UpdateOne(ctx,
-			bson.M{"_id": doc["_id"]},
+			bson.M{"_id": (*doc)["_id"]},
 			bson.M{"$set": set})
 		if err != nil {
 			return st, fmt.Errorf("catalog %s %s: %w", shelf, it.Name, err)
@@ -472,7 +472,7 @@ func docKeys(doc bson.M) []string {
 	if n := normalize(toString(doc["name"])); n != "" {
 		keys = append(keys, n)
 	}
-	for _, a := range stringList(doc["aliases"]) {
+	for _, a := range stringList(doc, "aliases") {
 		if n := normalize(a); n != "" {
 			keys = append(keys, n)
 		}
