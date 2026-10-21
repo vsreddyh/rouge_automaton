@@ -218,10 +218,21 @@ func (e *Executor) Execute(ctx context.Context, name, argsJSON string) string {
 		if e.Wiki == nil {
 			return "wiki client not wired — report it as unconfirmed"
 		}
-		if res := e.Wiki.SearchFetch(ctx, query); res != "" {
-			return res
+		// The wiki shapes the query server-side, so a plain question
+		// still lands on the right page. The stage separates "the wiki
+		// has nothing" from "the wiki is down": the model must not
+		// report a dead uplink as a missing page.
+		res := e.Wiki.Lookup(ctx, query)
+		switch res.Stage {
+		case wiki.StageFound:
+			return res.Text
+		case wiki.StageFetchFail:
+			return "wiki unreachable — report it as unconfirmed"
+		case wiki.StageExtractEmpty:
+			return "wiki page carries no text — report it as unconfirmed"
+		default:
+			return "wiki has nothing on that either — report it as unconfirmed"
 		}
-		return "wiki has nothing on that either — report it as unconfirmed"
 	default:
 		return fmt.Sprintf("unknown tool %q — available: get_unit, list_units, get_gear, list_gear, get_place, war_status, planet_status, wiki_search", name)
 	}

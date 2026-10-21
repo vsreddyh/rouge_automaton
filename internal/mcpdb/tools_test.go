@@ -11,6 +11,7 @@ import (
 
 	"rouge_automaton/internal/config"
 	"rouge_automaton/internal/live"
+	"rouge_automaton/internal/wiki"
 )
 
 func TestToolDefs(t *testing.T) {
@@ -175,5 +176,45 @@ func TestPlanetStatusOutageVsUnknown(t *testing.T) {
 	e = &Executor{Live: live.New(config.Config{HD2APIBase: liveServer(t, false).URL})}
 	if got := e.Execute(t.Context(), "planet_status", `{"name":"Mintoria"}`); !strings.Contains(got, "uplink as down") {
 		t.Fatalf("outage must report uplink down: %q", got)
+	}
+}
+
+// wikiServer serves the three wiki states wiki_search must tell apart: a
+// page that answers, a wiki that knows nothing, and a dead uplink.
+func wikiServer(t *testing.T, mode string) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch mode {
+		case "down":
+			w.WriteHeader(500)
+		case "hit":
+			if r.URL.Query().Get("prop") == "extracts" {
+				_, _ = w.Write([]byte(`{"query":{"pages":[{"title":"Automatons","extract":"Faction of robots."}]}}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"query":{"pages":[{"title":"Automatons"}]}}`))
+		default:
+			_, _ = w.Write([]byte(`{"query":{"pages":[{"title":"nope","missing":true}]}}`))
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// TestWikiSearchOutageVsNothing pins the issue-52 contract: a shaped
+// question that resolves cites the wiki page, a wiki with nothing on the
+// topic says so, and a dead uplink never masquerades as a missing page.
+func TestWikiSearchOutageVsNothing(t *testing.T) {
+	e := &Executor{Wiki: &wiki.Client{Base: wikiServer(t, "hit").URL}}
+	if got := e.Execute(t.Context(), "wiki_search", `{"query":"best loadout vs Automatons"}`); !strings.Contains(got, "Automatons:") {
+		t.Fatalf("shaped query must cite the wiki page: %q", got)
+	}
+	e = &Executor{Wiki: &wiki.Client{Base: wikiServer(t, "empty").URL}}
+	if got := e.Execute(t.Context(), "wiki_search", `{"query":"best loadout vs Automatons"}`); !strings.Contains(got, "nothing on that either") {
+		t.Fatalf("wiki with nothing on the topic: %q", got)
+	}
+	e = &Executor{Wiki: &wiki.Client{Base: wikiServer(t, "down").URL}}
+	if got := e.Execute(t.Context(), "wiki_search", `{"query":"best loadout vs Automatons"}`); !strings.Contains(got, "unreachable") {
+		t.Fatalf("dead wiki must not read as a missing page: %q", got)
 	}
 }
