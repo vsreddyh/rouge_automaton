@@ -63,11 +63,11 @@ func NewServer(backend ToolBackend) *mcp.Server {
 	addGet("get_unit", "Fetch one enemy unit or structure by exact name or alias (case-insensitive). Full doc: role, weak points, counters, source.")
 	addGet("get_gear", "Fetch one weapon, stratagem, armor or booster by exact name or alias (case-insensitive).")
 	addGet("get_place", "Fetch one static planet, biome, mission, difficulty or effect by exact name (case-insensitive).")
-	mcp.AddTool(server, &mcp.Tool{Name: "list_units", Description: "List the faction-filtered unit roster, then get_unit for detail."},
+	mcp.AddTool(server, &mcp.Tool{Name: "list_units", Description: "List the faction-filtered unit roster (names and roles), then get_unit for detail."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, args listUnitsArgs) (*mcp.CallToolResult, any, error) {
 			return textResult(backend.Execute(ctx, "list_units", toJSON(args)))
 		})
-	mcp.AddTool(server, &mcp.Tool{Name: "list_gear", Description: "List one gear shelf by category, then get_gear for detail."},
+	mcp.AddTool(server, &mcp.Tool{Name: "list_gear", Description: "List one gear shelf by category (names, plus the type when known), then get_gear for detail."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, args listGearArgs) (*mcp.CallToolResult, any, error) {
 			return textResult(backend.Execute(ctx, "list_gear", toJSON(args)))
 		})

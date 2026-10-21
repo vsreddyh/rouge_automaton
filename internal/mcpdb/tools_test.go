@@ -87,6 +87,19 @@ func TestExecuteUnknownAndBadArgs(t *testing.T) {
 	}
 }
 
+// TestToolGuidanceRosterCarveOut pins issue #53: list tools are rosters, so
+// the procedure must not demand weak point + counter on every intel answer.
+func TestToolGuidanceRosterCarveOut(t *testing.T) {
+	if strings.Contains(ToolGuidance, "Every intel answer") {
+		t.Fatal("guidance still mandates weak+counter on every answer")
+	}
+	for _, want := range []string{"Roster answers", "names and roles only", "Cite each source once"} {
+		if !strings.Contains(ToolGuidance, want) {
+			t.Fatalf("guidance must carry %q", want)
+		}
+	}
+}
+
 func TestIntArgShapes(t *testing.T) {
 	for _, tc := range []struct {
 		v    any

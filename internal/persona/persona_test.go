@@ -117,6 +117,25 @@ func TestIntelPromptHasNoBackstory(t *testing.T) {
 	}
 }
 
+// TestRosterCarveOut pins issue #53: the unconditional weak+counter rule
+// that rode every prompt is gone, and both prompt layers say what a roster
+// answer is allowed to carry.
+func TestRosterCarveOut(t *testing.T) {
+	for name, got := range map[string]string{
+		"intel":    IntelSystemPrompt(),
+		"identity": IdentitySystemPrompt(),
+	} {
+		if strings.Contains(got, "Every intel answer") {
+			t.Fatalf("%s prompt still mandates weak+counter on every answer", name)
+		}
+		for _, want := range []string{"Roster answers", "names and roles only"} {
+			if !strings.Contains(got, want) {
+				t.Fatalf("%s prompt must carry %q", name, want)
+			}
+		}
+	}
+}
+
 func TestIdentityPromptKeepsCanon(t *testing.T) {
 	for _, q := range []string{
 		"who are you?", "what is your name?", "your serial?", "serial?",

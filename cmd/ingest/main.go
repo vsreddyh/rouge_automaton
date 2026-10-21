@@ -267,6 +267,23 @@ func covered(known map[string][]string, seed string) bool {
 	return false
 }
 
+// structureDoc builds the Mongo body for one structure seed. Structures
+// carry note, not role: note is tactical advice, and copying it into role
+// leaked counters into list_units (#53). get_unit still falls back to note
+// for detail, and FilterUnits matches note for role filters.
+func structureDoc(faction, source string, s structureSeed) bson.M {
+	return bson.M{
+		"faction": faction, "name": s.Name,
+		"note":          s.Note,
+		"source":        source,
+		"source_url":    "",
+		"rev_id":        0,
+		"patch_version": "",
+		// No text_blob: the fuzzy ranker that read it is gone, and
+		// findAll excludes it — seeds carry only curated fields.
+	}
+}
+
 func run(mongoURI, dataDir string) error {
 	if mongoURI == "" {
 		mongoURI = "mongodb://localhost:27017/rouge"
@@ -404,15 +421,7 @@ func run(mongoURI, dataDir string) error {
 			if strings.TrimSpace(s.Name) == "" || covered(knownStructures, s.Name) {
 				continue
 			}
-			seed := bson.M{
-				"faction": faction, "name": s.Name,
-				"note": s.Note, "role": s.Note,
-				"source":        "data/" + filepath.Base(f),
-				"source_url":    "",
-				"rev_id":        0,
-				"patch_version": "",
-				// No text_blob: see the units seed above.
-			}
+			seed := structureDoc(faction, "data/"+filepath.Base(f), s)
 			setList(seed, "counters", s.Counters)
 			structOps = append(structOps, mongo.NewUpdateOneModel().
 				SetFilter(bson.M{"faction": faction, "name": s.Name}).
