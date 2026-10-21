@@ -332,6 +332,12 @@ func run(mongoURI, dataDir string) error {
 	// Gear and world shelves need the same per-collection coverage map:
 	// a seed whose name is already in the collection (or is a combined
 	// "A / B" name covered by standalone docs) must not be re-seeded.
+	// The map is a snapshot of the database taken before this run, the
+	// same contract the units and structures shelves use: on a green-field
+	// database a combined seed and a standalone seed of the same part can
+	// both land, and the next run skips the redundant re-upsert. The
+	// lookup stays deterministic either way (the store returns the first
+	// name-ordered exact match).
 	knownDocs := map[string]map[string][]string{}
 	for _, coll := range docCollections {
 		k, err := loadKnown(coll)
