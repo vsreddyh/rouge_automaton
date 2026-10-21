@@ -23,7 +23,7 @@ func TestShapeAcceptanceQuery(t *testing.T) {
 	// the searches must try the raw question, the de-framed keywords
 	// and then the shorter runs of them.
 	titles, searches := shape("best loadout vs Automatons Helldivers 2")
-	wantTitles := []string{"loadout Automatons", "Automatons", "loadout"}
+	wantTitles := []string{"loadout vs Automatons", "Automatons", "loadout"}
 	if !equalStrings(titles, wantTitles) {
 		t.Fatalf("titles = %q, want %q", titles, wantTitles)
 	}
@@ -40,7 +40,7 @@ func TestShapeAcceptanceQuery(t *testing.T) {
 
 func TestShapeDropsFraming(t *testing.T) {
 	titles, _ := shape("what is the best stratagem against Terminids")
-	want := []string{"stratagem Terminids", "Terminids", "stratagem"}
+	want := []string{"stratagem against Terminids", "Terminids", "stratagem"}
 	if !equalStrings(titles, want) {
 		t.Fatalf("titles = %q, want %q", titles, want)
 	}
@@ -65,11 +65,27 @@ func TestShapeKeepsEntityPhrase(t *testing.T) {
 	}
 }
 
+func TestShapeKeepsFunctionWordInsideName(t *testing.T) {
+	// A page may spell its name with a framing word inside it.
+	titles, _ := shape("Blitz Search And Destroy")
+	want := []string{
+		"Blitz Search And Destroy",
+		"Search And Destroy",
+		"Blitz Search",
+		"Destroy",
+		"Search",
+		"Blitz",
+	}
+	if !equalStrings(titles, want) {
+		t.Fatalf("titles = %q, want %q", titles, want)
+	}
+}
+
 func TestShapeSubjectLast(t *testing.T) {
 	// A question names its subject last ("stratagems vs Terminids"), so
 	// the later run wins a tie between same-length candidates.
 	titles, _ := shape("weapons for automatons")
-	want := []string{"weapons automatons", "automatons", "weapons"}
+	want := []string{"weapons for automatons", "automatons", "weapons"}
 	if !equalStrings(titles, want) {
 		t.Fatalf("titles = %q, want %q", titles, want)
 	}
@@ -127,16 +143,6 @@ func TestTokenizeCurlyApostrophe(t *testing.T) {
 	}
 }
 
-func TestDedupeFold(t *testing.T) {
-	// Titles resolve case-insensitively, so both spellings must not
-	// spend two slots of the title batch.
-	got := dedupeFold([]string{"Automatons", "automatons", "Tundra", "tundra", "loadout"})
-	want := []string{"Automatons", "Tundra", "loadout"}
-	if !equalStrings(got, want) {
-		t.Fatalf("dedupeFold = %q, want %q", got, want)
-	}
-}
-
 func TestTokenizeKeepsDesignations(t *testing.T) {
 	got := tokenize("AR-23C Arc Cannon")
 	want := []string{"AR-23C", "Arc", "Cannon"}
@@ -145,13 +151,31 @@ func TestTokenizeKeepsDesignations(t *testing.T) {
 	}
 }
 
-func TestContentKeywordsKeepsEntityCase(t *testing.T) {
-	got := contentKeywords(tokenize("best loadout vs Automatons Helldivers 2"))
+func TestContentKeywords(t *testing.T) {
+	got := contentKeywords(tokenize("best loadout vs Automatons"))
 	want := []string{"loadout", "Automatons"}
 	if !equalStrings(got, want) {
 		t.Fatalf("keywords = %q, want %q", got, want)
 	}
+}
+
+func TestDropGameName(t *testing.T) {
+	got := dropGameName(tokenize("best loadout vs Automatons Helldivers 2"))
+	want := []string{"best", "loadout", "vs", "Automatons"}
+	if !equalStrings(got, want) {
+		t.Fatalf("tokens = %q, want %q", got, want)
+	}
 	if strings.Contains(strings.Join(got, " "), "helldivers") {
-		t.Fatal("the game name must not survive as a keyword")
+		t.Fatal("the game name must not survive as a token")
+	}
+}
+
+func TestDedupeFold(t *testing.T) {
+	// Titles resolve case-insensitively, so both spellings must not
+	// spend two slots of the title batch.
+	got := dedupeFold([]string{"Automatons", "automatons", "Tundra", "tundra", "loadout"})
+	want := []string{"Automatons", "Tundra", "loadout"}
+	if !equalStrings(got, want) {
+		t.Fatalf("dedupeFold = %q, want %q", got, want)
 	}
 }

@@ -95,21 +95,17 @@ func tokenize(q string) []string {
 	return out
 }
 
-// contentKeywords drops the framing words and the game's own name: the
-// fallback wiki is the Helldivers 2 wiki, so every page it holds is
-// about this game and its name narrows nothing.
-func contentKeywords(tokens []string) []string {
+// dropGameName removes the game's own name: the fallback wiki is the
+// Helldivers 2 wiki, so every page it holds is about this game and its
+// name narrows nothing.
+func dropGameName(tokens []string) []string {
 	out := make([]string, 0, len(tokens))
 	for i := 0; i < len(tokens); i++ {
 		t := tokens[i]
-		low := strings.ToLower(t)
-		if low == "helldivers" {
+		if strings.EqualFold(t, "helldivers") {
 			if i+1 < len(tokens) && strings.EqualFold(tokens[i+1], "2") {
 				i++ // "Helldivers 2" is one name: drop the "2" with it
 			}
-			continue
-		}
-		if framingWords[low] {
 			continue
 		}
 		out = append(out, t)
@@ -117,19 +113,43 @@ func contentKeywords(tokens []string) []string {
 	return out
 }
 
-// ngrams returns the contiguous word runs of kw, longest first. Within a
-// length a run whose first word is a name comes first — the model
-// capitalizes entity names ("Tundra", "Hulk Bruiser") and leaves common
-// words ("weapons", "biome") alone — and among equals the later mention
-// comes first: a question names its subject last ("how do I kill Hulk
-// Bruiser").
-func ngrams(kw []string) []string {
-	out := make([]string, 0, len(kw)*maxTitleWords)
+// contentKeywords drops the framing words: the question scaffolding.
+func contentKeywords(tokens []string) []string {
+	out := make([]string, 0, len(tokens))
+	for _, t := range tokens {
+		if isFraming(t) {
+			continue
+		}
+		out = append(out, t)
+	}
+	return out
+}
+
+// isFraming reports whether a word carries no page signal.
+func isFraming(t string) bool {
+	return framingWords[strings.ToLower(t)]
+}
+
+// ngrams returns the contiguous word runs of tokens, longest first.
+// Within a length a run whose first word is a name comes first — the
+// model capitalizes entity names ("Tundra", "Hulk Bruiser") and leaves
+// common words ("weapons", "biome") alone — and among equals the later
+// mention comes first: a question names its subject last ("how do I
+// kill Hulk Bruiser").
+//
+// A run that starts or ends with a framing word is dropped: scaffolding
+// is not part of a page name. A framing word inside a run stays, because
+// a page may spell its name with one ("Blitz Search And Destroy").
+func ngrams(tokens []string) []string {
+	out := make([]string, 0, len(tokens)*maxTitleWords)
 	for n := maxTitleWords; n >= 1; n-- {
 		var named, common []string
-		for i := len(kw) - n; i >= 0; i-- {
-			run := strings.Join(kw[i:i+n], " ")
-			if isNamed(kw[i]) {
+		for i := len(tokens) - n; i >= 0; i-- {
+			if isFraming(tokens[i]) || isFraming(tokens[i+n-1]) {
+				continue
+			}
+			run := strings.Join(tokens[i:i+n], " ")
+			if isNamed(tokens[i]) {
 				named = append(named, run)
 				continue
 			}
@@ -154,10 +174,11 @@ func shape(raw string) (titles, searches []string) {
 	if raw == "" {
 		return nil, nil
 	}
-	kw := contentKeywords(tokenize(raw))
-	// Titles resolve case-insensitively, so two spellings of one name
-	// would spend two slots of the title batch.
-	titles = dedupeFold(ngrams(kw))
+	tokens := dropGameName(tokenize(raw))
+	// Titles keep the question's own wording: a page may spell its name
+	// with a framing word inside it ("Blitz Search And Destroy"), so
+	// the runs come from the tokens as written.
+	titles = dedupeFold(ngrams(tokens))
 	if len(titles) > maxTitleCandidates {
 		titles = titles[:maxTitleCandidates]
 	}
@@ -165,6 +186,7 @@ func shape(raw string) (titles, searches []string) {
 	// ("Arc Cannon") the wiki answers it directly. Then the de-framed
 	// keywords, then shorter runs of them — MediaWiki ANDs every term,
 	// so a query one term too long misses a page that has the rest.
+	kw := contentKeywords(tokens)
 	searches = []string{raw}
 	if full := strings.Join(kw, " "); full != "" {
 		searches = append(searches, full)
