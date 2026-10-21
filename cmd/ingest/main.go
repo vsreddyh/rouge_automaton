@@ -2,10 +2,10 @@
 // Safe to re-run: seed fields apply on insert only ($setOnInsert), so
 // wiki-enriched docs from the crawler are never clobbered.
 //
-// TODO: seed files cover units and structures only; gear (weapons,
-// stratagems, armor, boosters) and world (biomes, planets, missions,
-// difficulty, effects) collections still rely on the wiki crawl until
-// curated seed files land (same data/*.json shape, $setOnInsert semantics).
+// Seed files cover units and structures (per faction) plus the gear shelves
+// (weapons, stratagems, armor, boosters) and the world shelves (biomes,
+// planets, missions, difficulty, effects). Gear and world docs share no
+// schema, so they seed as free-form bags: name + aliases + fields.
 package main
 
 import (
@@ -43,10 +43,132 @@ type structureSeed struct {
 	Note     string   `json:"note"`
 }
 
+// docSeed is one curated gear or world doc: a canonical name, optional
+// aliases, and a free-form bag of fields. The unit and structure seeds
+// have fixed schemas; gear and world docs do not (a weapon carries an
+// infobox, a biome carries hazards), so only name and aliases are lifted
+// out and the rest of the bag becomes the Mongo doc body verbatim.
+type docSeed struct {
+	Name    string
+	Aliases []string
+	Fields  bson.M
+}
+
+// UnmarshalJSON lifts name and aliases out of a seed doc and keeps the
+// remaining keys as the doc body. Aliases coerce through the same
+// mcpdb.Values gate the store matches with, so a seed alias can never
+// dodge the query-time lookup.
+func (d *docSeed) UnmarshalJSON(b []byte) error {
+	var raw map[string]any
+	if err := json.Unmarshal(b, &raw); err != nil {
+		return err
+	}
+	d.Name = strings.TrimSpace(mcpdb.ToString(raw["name"]))
+	d.Aliases = nil
+	for _, a := range mcpdb.Values(raw["aliases"]) {
+		if a = strings.TrimSpace(a); a != "" {
+			d.Aliases = append(d.Aliases, a)
+		}
+	}
+	delete(raw, "name")
+	delete(raw, "aliases")
+	d.Fields = bsonify(raw)
+	return nil
+}
+
+// bsonifyValue converts a decoded JSON value into a BSON-safe value:
+// nested objects become bson.M and arrays become bson.A, recursively, so a
+// seed's nested params map lands as a document instead of an opaque blob.
+func bsonifyValue(v any) any {
+	switch t := v.(type) {
+	case map[string]any:
+		return bsonify(t)
+	case []any:
+		arr := make(bson.A, 0, len(t))
+		for _, item := range t {
+			arr = append(arr, bsonifyValue(item))
+		}
+		return arr
+	default:
+		return v
+	}
+}
+
+// bsonify converts a decoded JSON bag into BSON-safe values.
+func bsonify(v map[string]any) bson.M {
+	out := bson.M{}
+	for k, e := range v {
+		out[k] = bsonifyValue(e)
+	}
+	return out
+}
+
+// reservedDocFields never come from a seed bag: Mongo owns _id, the wiki
+// watcher owns fetched_at, and text_blob and embedding are excluded from
+// every read path (the ranker that read them is gone).
+var reservedDocFields = map[string]bool{
+	"_id": true, "fetched_at": true, "text_blob": true, "embedding": true,
+}
+
+// setList writes a list field only when it has entries: a nil slice
+// encodes as BSON null, and an explicit null would sit beside arrays in
+// the same field across docs.
+func setList(seed bson.M, key string, items []string) {
+	if len(items) > 0 {
+		seed[key] = items
+	}
+}
+
+// seedDoc builds the Mongo body for one free-form seed: the field bag
+// minus the reserved fields, then the identity and provenance the ingest
+// owns. A seed must never set what Mongo or the wiki watcher owns.
+func seedDoc(ds docSeed, source string) bson.M {
+	seed := bson.M{}
+	for k, v := range ds.Fields {
+		if reservedDocFields[k] {
+			continue
+		}
+		seed[k] = v
+	}
+	seed["name"] = ds.Name
+	setList(seed, "aliases", ds.Aliases)
+	seed["source"] = source
+	seed["source_url"] = ""
+	seed["rev_id"] = 0
+	seed["patch_version"] = ""
+	return seed
+}
+
+// docCollections are the gear and world shelves seeded as free-form docs.
+// The names are Mongo collection names, so the seed file keys match the
+// collection each doc lands in.
+var docCollections = []string{
+	"weapons", "stratagems", "armor", "boosters",
+	"biomes", "planets", "missions", "difficulty", "effects",
+}
+
 type dataFile struct {
 	Faction    string          `json:"faction"`
 	Units      []unitSeed      `json:"units"`
 	Structures []structureSeed `json:"structures"`
+	Weapons    []docSeed       `json:"weapons"`
+	Stratagems []docSeed       `json:"stratagems"`
+	Armor      []docSeed       `json:"armor"`
+	Boosters   []docSeed       `json:"boosters"`
+	Biomes     []docSeed       `json:"biomes"`
+	Planets    []docSeed       `json:"planets"`
+	Missions   []docSeed       `json:"missions"`
+	Difficulty []docSeed       `json:"difficulty"`
+	Effects    []docSeed       `json:"effects"`
+}
+
+// shelves returns the free-form doc shelves keyed by collection name.
+func (d *dataFile) shelves() map[string][]docSeed {
+	return map[string][]docSeed{
+		"weapons": d.Weapons, "stratagems": d.Stratagems, "armor": d.Armor,
+		"boosters": d.Boosters, "biomes": d.Biomes, "planets": d.Planets,
+		"missions": d.Missions, "difficulty": d.Difficulty, "effects": d.Effects,
+	}
 }
 
 func main() {
@@ -105,8 +227,7 @@ func ensureIndexes(ctx context.Context, db *mongo.Database) error {
 		}
 		dropLegacy(coll, "faction_1_name_1")
 	}
-	for _, coll := range []string{"weapons", "stratagems", "armor", "boosters",
-		"biomes", "planets", "missions", "difficulty", "effects"} {
+	for _, coll := range docCollections {
 		if _, err := db.Collection(coll).Indexes().CreateOne(ctx, single); err != nil {
 			return fmt.Errorf("index %s: %w", coll, err)
 		}
@@ -115,17 +236,51 @@ func ensureIndexes(ctx context.Context, db *mongo.Database) error {
 	return nil
 }
 
+// covered reports whether a seed name is already represented in a
+// collection: the same name is present, or the seed is a combined
+// "A / B" name whose parts exist as standalone docs. Matching is on
+// exact name or alias tokens, case-insensitively.
+func covered(known map[string][]string, seed string) bool {
+	toks := map[string]bool{}
+	// Split on the " / " separator only: gear and weapon names carry
+	// slashes inside the designation ("AR/GL-21 One-Two") and must stay
+	// one token.
+	for _, t := range strings.Split(strings.ToLower(seed), " / ") {
+		if t = strings.TrimSpace(t); t != "" {
+			toks[t] = true
+		}
+	}
+	want := strings.ToLower(strings.TrimSpace(seed))
+	for n, al := range known {
+		if n == want {
+			continue
+		}
+		if toks[n] {
+			return true
+		}
+		for _, a := range al {
+			if toks[a] {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func run(mongoURI, dataDir string) error {
 	if mongoURI == "" {
 		mongoURI = "mongodb://localhost:27017/rouge"
 	}
 	files, err := filepath.Glob(filepath.Join(dataDir, "*.json"))
-	if err != nil || len(files) == 0 {
+	if err != nil {
+		return fmt.Errorf("glob %s: %w", dataDir, err)
+	}
+	if len(files) == 0 {
 		return fmt.Errorf("no seed files in %s", dataDir)
 	}
 	client, err := mongo.Connect(options.Client().ApplyURI(mongoURI))
 	if err != nil {
-		return err
+		return fmt.Errorf("mongo connect: %w", err)
 	}
 	defer client.Disconnect(context.Background())
 	pingCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -180,43 +335,37 @@ func run(mongoURI, dataDir string) error {
 	}
 	knownUnits, err := loadKnown("units")
 	if err != nil {
-		return err
+		return fmt.Errorf("load known units: %w", err)
 	}
 	knownStructures, err := loadKnown("structures")
 	if err != nil {
-		return err
+		return fmt.Errorf("load known structures: %w", err)
 	}
-	// covered reports whether a combined seed name (e.g. "Charger / Behemoth")
-	// is already represented by standalone docs in the same collection,
-	// matched on exact /-tokens against known names and aliases.
-	covered := func(known map[string][]string, seed string) bool {
-		toks := map[string]bool{}
-		for _, t := range strings.Split(strings.ToLower(seed), "/") {
-			if t = strings.TrimSpace(t); t != "" {
-				toks[t] = true
-			}
+	// Gear and world shelves need the same per-collection coverage map:
+	// a seed whose name is already in the collection (or is a combined
+	// "A / B" name covered by standalone docs) must not be re-seeded.
+	// The map is a snapshot of the database taken before this run, the
+	// same contract the units and structures shelves use: on a green-field
+	// database a combined seed and a standalone seed of the same part can
+	// both land, and the next run skips the redundant re-upsert. The
+	// lookup stays deterministic either way (the store returns the first
+	// name-ordered exact match).
+	knownDocs := map[string]map[string][]string{}
+	for _, coll := range docCollections {
+		k, err := loadKnown(coll)
+		if err != nil {
+			return fmt.Errorf("load known %s: %w", coll, err)
 		}
-		for n, al := range known {
-			if n == strings.ToLower(strings.TrimSpace(seed)) {
-				continue
-			}
-			if toks[n] {
-				return true
-			}
-			for _, a := range al {
-				if toks[a] {
-					return true
-				}
-			}
-		}
-		return false
+		knownDocs[coll] = k
 	}
 	var unitOps []mongo.WriteModel
 	var structOps []mongo.WriteModel
+	// docOps holds one upsert list per gear/world collection.
+	docOps := map[string][]mongo.WriteModel{}
 	for _, f := range files {
 		raw, err := os.ReadFile(f)
 		if err != nil {
-			return err
+			return fmt.Errorf("%s: %w", f, err)
 		}
 		var d dataFile
 		if err := json.Unmarshal(raw, &d); err != nil {
@@ -231,8 +380,7 @@ func run(mongoURI, dataDir string) error {
 				continue
 			}
 			seed := bson.M{
-				"faction": faction, "name": u.Name, "aliases": u.Aliases,
-				"role": u.Role, "weak_points": u.WeakPoints, "counters": u.Counters,
+				"faction": faction, "name": u.Name, "role": u.Role,
 				"source":        "data/" + filepath.Base(f),
 				"source_url":    "",
 				"rev_id":        0,
@@ -243,6 +391,9 @@ func run(mongoURI, dataDir string) error {
 				// timestamp. An explicit null would sit beside strings in
 				// the same field across docs.
 			}
+			setList(seed, "aliases", u.Aliases)
+			setList(seed, "weak_points", u.WeakPoints)
+			setList(seed, "counters", u.Counters)
 			unitOps = append(unitOps, mongo.NewUpdateOneModel().
 				SetFilter(bson.M{"faction": faction, "name": u.Name}).
 				SetUpdate(bson.M{"$setOnInsert": seed}).
@@ -254,7 +405,7 @@ func run(mongoURI, dataDir string) error {
 				continue
 			}
 			seed := bson.M{
-				"faction": faction, "name": s.Name, "counters": s.Counters,
+				"faction": faction, "name": s.Name,
 				"note": s.Note, "role": s.Note,
 				"source":        "data/" + filepath.Base(f),
 				"source_url":    "",
@@ -262,14 +413,38 @@ func run(mongoURI, dataDir string) error {
 				"patch_version": "",
 				// No text_blob: see the units seed above.
 			}
+			setList(seed, "counters", s.Counters)
 			structOps = append(structOps, mongo.NewUpdateOneModel().
 				SetFilter(bson.M{"faction": faction, "name": s.Name}).
 				SetUpdate(bson.M{"$setOnInsert": seed}).
 				SetCollation(ciCollation).
 				SetUpsert(true))
 		}
+		shelves := d.shelves()
+		for _, coll := range docCollections {
+			for _, ds := range shelves[coll] {
+				if ds.Name == "" || covered(knownDocs[coll], ds.Name) {
+					continue
+				}
+				seed := seedDoc(ds, "data/"+filepath.Base(f))
+				// No text_blob: the fuzzy ranker that read it is gone, and
+				// findAll excludes it — seeds carry only curated fields.
+				// No fetched_at: absent until the watcher writes a real
+				// timestamp. An explicit null would sit beside strings in
+				// the same field across docs.
+				docOps[coll] = append(docOps[coll], mongo.NewUpdateOneModel().
+					SetFilter(bson.M{"name": ds.Name}).
+					SetUpdate(bson.M{"$setOnInsert": seed}).
+					SetCollation(ciCollation).
+					SetUpsert(true))
+			}
+		}
 	}
-	if len(unitOps) == 0 && len(structOps) == 0 {
+	total := len(unitOps) + len(structOps)
+	for _, ops := range docOps {
+		total += len(ops)
+	}
+	if total == 0 {
 		fmt.Println("ingest: nothing to do")
 		return nil
 	}
@@ -279,21 +454,44 @@ func run(mongoURI, dataDir string) error {
 	wctx, wcancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer wcancel()
 	var upserted, matched int64
-	if len(unitOps) > 0 {
-		res, err := db.Collection("units").BulkWrite(wctx, unitOps)
+	// Unordered writes: one bad doc must not abort the rest of a 270-doc
+	// shelf. Seed names are unique per collection (the seed-file test
+	// enforces it), so two upserts can never race for the same doc.
+	bulkOpts := options.BulkWrite().SetOrdered(false)
+	// bulkSeed runs one shelf's upserts. Unordered writes mean some docs
+	// can land before an error, so a failure logs the partial counts
+	// instead of dropping them.
+	bulkSeed := func(coll string, ops []mongo.WriteModel) error {
+		res, err := db.Collection(coll).BulkWrite(wctx, ops, bulkOpts)
 		if err != nil {
-			return err
+			if res != nil {
+				log.Printf("ingest: %s partial upserted=%d matched=%d: %v",
+					coll, res.UpsertedCount, res.MatchedCount, err)
+			}
+			return fmt.Errorf("seed %s: %w", coll, err)
 		}
 		upserted += res.UpsertedCount
 		matched += res.MatchedCount
+		return nil
+	}
+	if len(unitOps) > 0 {
+		if err := bulkSeed("units", unitOps); err != nil {
+			return err
+		}
 	}
 	if len(structOps) > 0 {
-		res, err := db.Collection("structures").BulkWrite(wctx, structOps)
-		if err != nil {
+		if err := bulkSeed("structures", structOps); err != nil {
 			return err
 		}
-		upserted += res.UpsertedCount
-		matched += res.MatchedCount
+	}
+	for _, coll := range docCollections {
+		ops := docOps[coll]
+		if len(ops) == 0 {
+			continue
+		}
+		if err := bulkSeed(coll, ops); err != nil {
+			return err
+		}
 	}
 	fmt.Printf("ingest: upserted=%d matched=%d\n", upserted, matched)
 	return nil

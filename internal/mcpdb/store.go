@@ -41,10 +41,12 @@ var GearCollections = []string{"weapons", "stratagems", "armor", "boosters"}
 var PlaceCollections = []string{"biomes", "planets", "missions", "difficulty", "effects"}
 
 // Retrieval budgets: exact tools still cap the Mongo scan per collection.
-// Collections are small (~900 docs total), so these caps bound prompt cost,
+// The cap must clear the largest seeded shelf (planets holds ~270 docs)
+// with headroom for growth, because a name past the cap misses silently.
+// Collections are small (~1,400 docs total), so this bounds prompt cost,
 // not correctness — the match itself is exact, not ranked.
 const (
-	fetchCap         = 300 // per-collection scan cap for exact/list lookups
+	fetchCap         = 600 // per-collection scan cap for exact/list lookups
 	defaultListLimit = 10  // roster default when the model omits limit
 	maxListLimit     = 20  // roster ceiling: one world question's worth
 )
@@ -420,7 +422,9 @@ func docSource(d bson.M) string {
 // what lets the model answer with citations instead of bare assertions.
 // Field fallbacks (effect_text, procurement) exist because gear and booster
 // docs use different schemas than unit docs. Lists ride on this short shape;
-// single exact fetches use FormatFull for the richer excerpt.
+// single exact fetches use FormatFull for the richer excerpt. Segments with
+// no data are dropped rather than rendered empty: a gear or biome doc has
+// no weak points, and "weak  | counter X" reads like missing intel.
 func FormatContext(docs []bson.M) string {
 	var lines []string
 	for _, d := range docs {
@@ -436,7 +440,18 @@ func FormatContext(docs []bson.M) string {
 		// Roster lines ride 20-up in one tool result: cap both segments
 		// like FormatFull so one long wiki-crawled doc cannot blow the
 		// prompt budget for the whole page.
-		lines = append(lines, "- "+docName(d)+": weak "+cut(weak, 150)+" | counter "+cut(counters, 150)+" [source: "+src+"]")
+		var segments []string
+		if weak != "" {
+			segments = append(segments, "weak "+cut(weak, 150))
+		}
+		if counters != "" {
+			segments = append(segments, "counter "+cut(counters, 150))
+		}
+		line := "- " + docName(d)
+		if len(segments) > 0 {
+			line += ": " + strings.Join(segments, " | ")
+		}
+		lines = append(lines, line+" [source: "+src+"]")
 	}
 	return strings.Join(lines, "\n")
 }
