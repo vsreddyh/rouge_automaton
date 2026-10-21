@@ -26,7 +26,7 @@ internal/
   mcpdb/            # Mongo exact-match intel tools + cited context (no router)
   gorelay/          # OpenCode Go relay client (Responses API + tool loop)
   discord/          # discordgo gateway: allowlist, mention gate, threads
-  wiki/             # helldivers.wiki.gg fallback (search + fetch)
+  wiki/             # helldivers.wiki.gg fallback (query shaping + search + fetch)
   live/             # live war-status API (Type-L)
   wikifeed/         # RecentChanges Atom feed + MediaWiki API client
   wikiparse/        # wikitext parsers (infobox, anatomy, tactics, biomes)
@@ -82,7 +82,12 @@ podman run --rm --network=host -e MONGO_URI=mongodb://127.0.0.1:27017/rouge \
    live data). Aliases resolve server-side; exact fetch returns the full
    doc (role, weak points, counters, source). Every answer cites its source.
 3. Miss → the model falls back to `wiki_search` (`helldivers.wiki.gg`),
-   summarized with links. Unknowns are reported as unconfirmed, not invented.
+   summarized with links. The query is shaped server-side: framing words
+   ("what is", "vs") are dropped, exact page titles are tried first, and
+   a zero-hit search retries with shorter keyword runs — so a plain
+   question lands on the right page instead of nothing. Unknowns are
+   reported as unconfirmed, not invented; a dead wiki is reported as a
+   dead wiki, never as a missing page.
    Genuinely ambiguous queries with no resolving tool get one short
    clarifying question instead of guesses or search loops.
 4. Rate limit (`429`) → exact reply: `The Lost Son is busy spreading democracy on Cyberstan. Hold position, Helldiver — try again shortly. Estimated time of liberation: {n}s.` Other backend failures → `Uplink dead. No fallback. For Super Earth, try later.` Tool-loop exhaustion (model kept calling tools past maxToolRounds=10 with no answer) → `Couldn't pin it down — intel thin or scattered. Unconfirmed. Narrow the target and try again.` (never Uplink dead; the uplink is healthy, the intel is thin — fires far less often at 10 rounds).

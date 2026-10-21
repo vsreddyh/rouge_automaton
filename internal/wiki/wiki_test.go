@@ -2,72 +2,218 @@ package wiki
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 )
 
-func TestSearchFetch(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Query().Get("list") == "search" {
-			w.Write([]byte(`{"query":{"search":[{"title":"Hulk Bruiser"}]}}`))
+// fakeWiki stands in for helldivers.wiki.gg: it knows a set of pages and
+// answers the three API calls the client makes (title lookup, search,
+// extract).
+type fakeWiki struct {
+	// pages maps a canonical page title to its extract text.
+	pages map[string]string
+	// searches maps a search string to the top hit title.
+	searches map[string]string
+	// redirects maps a requested title to its redirect target.
+	redirects map[string]string
+	// status, when set, fails every call with that HTTP status.
+	status int
+}
+
+// page finds the canonical title for a requested one, the way MediaWiki
+// normalizes titles: case-insensitive, underscores for spaces.
+func (f fakeWiki) page(title string) (string, bool) {
+	want := strings.ToLower(strings.ReplaceAll(title, "_", " "))
+	for name := range f.pages {
+		if strings.ToLower(name) == want {
+			return name, true
+		}
+	}
+	return "", false
+}
+
+// redirect resolves a requested title to its redirect target.
+func (f fakeWiki) redirect(title string) (string, bool) {
+	for from, to := range f.redirects {
+		if strings.ToLower(from) == strings.ToLower(title) {
+			return to, true
+		}
+	}
+	return "", false
+}
+
+func (f fakeWiki) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if f.status != 0 {
+		w.WriteHeader(f.status)
+		return
+	}
+	q := r.URL.Query()
+	switch {
+	case q.Get("prop") == "extracts":
+		title := q.Get("titles")
+		canon, ok := f.page(title)
+		if !ok {
+			writeJSON(w, map[string]any{"query": map[string]any{"pages": []any{
+				map[string]any{"title": title, "missing": true},
+			}}})
 			return
 		}
-		w.Write([]byte(`{"query":{"pages":[{"extract":"Big walker.  Rear vent."}]}}`))
-	}))
-	defer srv.Close()
-	c := &Client{Base: srv.URL, HTTP: srv.Client()}
-	got := c.SearchFetch(context.Background(), "hulk")
-	if !strings.HasPrefix(got, "Hulk Bruiser:") || !strings.Contains(got, "[source:") {
-		t.Fatalf("got %q", got)
+		writeJSON(w, map[string]any{"query": map[string]any{"pages": []any{
+			map[string]any{"title": canon, "extract": f.pages[canon]},
+		}}})
+	case q.Get("list") == "search":
+		sr := q.Get("srsearch")
+		title, ok := f.searches[sr]
+		if !ok {
+			writeJSON(w, map[string]any{"query": map[string]any{"search": []any{}}})
+			return
+		}
+		writeJSON(w, map[string]any{"query": map[string]any{"search": []any{
+			map[string]any{"title": title},
+		}}})
+	default:
+		// The batched title lookup.
+		pages := []any{}
+		redirects := []any{}
+		for _, cand := range strings.Split(q.Get("titles"), "|") {
+			canon, found := f.page(cand)
+			if !found {
+				if to, isRedirect := f.redirect(cand); isRedirect {
+					redirects = append(redirects, map[string]any{"from": cand, "to": to})
+					canon, found = f.page(to)
+				}
+			}
+			if !found {
+				pages = append(pages, map[string]any{"title": cand, "missing": true})
+				continue
+			}
+			pages = append(pages, map[string]any{"title": canon})
+		}
+		query := map[string]any{"pages": pages}
+		if len(redirects) > 0 {
+			query["redirects"] = redirects
+		}
+		writeJSON(w, map[string]any{"query": query})
 	}
 }
 
-func TestEmpty(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(`{"query":{"search":[]}}`))
-	}))
-	defer srv.Close()
-	c := &Client{Base: srv.URL, HTTP: srv.Client()}
-	if got := c.SearchFetch(context.Background(), "zzz"); got != "" {
-		t.Fatalf("miss must be empty: %q", got)
+func writeJSON(w http.ResponseWriter, body map[string]any) {
+	raw, err := json.Marshal(body)
+	if err != nil {
+		w.WriteHeader(500)
+		return
+	}
+	w.Write(raw)
+}
+
+// serve starts a fake wiki and returns a client pointed at it.
+func serve(t *testing.T, f fakeWiki) *Client {
+	t.Helper()
+	srv := httptest.NewServer(f)
+	t.Cleanup(srv.Close)
+	return &Client{Base: srv.URL, HTTP: srv.Client()}
+}
+
+func TestLookupResolvesShapedQuery(t *testing.T) {
+	// The convo-test query: raw natural language that scores zero hits
+	// on the wiki. Shaping must land on the Automatons page.
+	c := serve(t, fakeWiki{pages: map[string]string{
+		"Automatons": "The Automatons are one of three factions the Helldivers can fight against.",
+	}})
+	res := c.Lookup(context.Background(), "best loadout vs Automatons Helldivers 2")
+	if res.Stage != StageFound {
+		t.Fatalf("stage = %q, want %q (err %v)", res.Stage, StageFound, res.Err)
+	}
+	if res.Title != "Automatons" {
+		t.Fatalf("title = %q, want Automatons", res.Title)
+	}
+	if !strings.HasPrefix(res.Text, "Automatons:") || !strings.Contains(res.Text, "[source:") {
+		t.Fatalf("text = %q", res.Text)
+	}
+}
+
+func TestLookupFallsBackToSearch(t *testing.T) {
+	// No page title matches, so the search path answers.
+	c := serve(t, fakeWiki{
+		pages:    map[string]string{"Hulk Bruiser": "Big walker. Rear vent."},
+		searches: map[string]string{"how do i kill hulk": "Hulk Bruiser"},
+	})
+	res := c.Lookup(context.Background(), "how do i kill hulk")
+	if res.Stage != StageFound || res.Title != "Hulk Bruiser" {
+		t.Fatalf("res = %+v", res)
+	}
+}
+
+func TestLookupShortensQueryOnMiss(t *testing.T) {
+	// The raw question and the de-framed keywords miss; a shorter run
+	// of the keywords hits.
+	c := serve(t, fakeWiki{
+		pages:    map[string]string{"AR-23C Arc Cannon": "Anti-tank cannon."},
+		searches: map[string]string{"cannon": "AR-23C Arc Cannon"},
+	})
+	res := c.Lookup(context.Background(), "what is the arc cannon")
+	if res.Stage != StageFound || res.Title != "AR-23C Arc Cannon" {
+		t.Fatalf("res = %+v", res)
+	}
+}
+
+func TestLookupSearchMiss(t *testing.T) {
+	c := serve(t, fakeWiki{})
+	res := c.Lookup(context.Background(), "zzz")
+	if res.Stage != StageSearchMiss {
+		t.Fatalf("stage = %q, want %q", res.Stage, StageSearchMiss)
+	}
+	if res.Text != "" {
+		t.Fatalf("a miss must carry no text: %q", res.Text)
+	}
+}
+
+func TestLookupFetchFail(t *testing.T) {
+	c := serve(t, fakeWiki{status: 500})
+	res := c.Lookup(context.Background(), "hulk")
+	if res.Stage != StageFetchFail {
+		t.Fatalf("stage = %q, want %q", res.Stage, StageFetchFail)
+	}
+}
+
+func TestLookupEmptyExtract(t *testing.T) {
+	c := serve(t, fakeWiki{pages: map[string]string{"Tundra": ""}})
+	res := c.Lookup(context.Background(), "Tundra")
+	if res.Stage != StageExtractEmpty {
+		t.Fatalf("stage = %q, want %q", res.Stage, StageExtractEmpty)
+	}
+}
+
+func TestLookupFollowsRedirect(t *testing.T) {
+	c := serve(t, fakeWiki{
+		pages:     map[string]string{"Hulk (disambiguation)": "Hulks are large, heavily armored Automatons."},
+		redirects: map[string]string{"hulk": "Hulk (disambiguation)"},
+	})
+	res := c.Lookup(context.Background(), "hulk")
+	if res.Stage != StageFound || res.Title != "Hulk (disambiguation)" {
+		t.Fatalf("res = %+v", res)
+	}
+}
+
+func TestLookupEmptyQuery(t *testing.T) {
+	c := serve(t, fakeWiki{})
+	if res := c.Lookup(context.Background(), "   "); res.Stage != StageSearchMiss {
+		t.Fatalf("stage = %q, want %q", res.Stage, StageSearchMiss)
 	}
 }
 
 func TestMultibyteTruncate(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Query().Get("list") == "search" {
-			w.Write([]byte(`{"query":{"search":[{"title":"T—est"}]}}`))
-			return
-		}
-		// 1500 em-dashes (3 bytes each): a byte-cut would split one.
-		w.Write([]byte(`{"query":{"pages":[{"extract":"` + strings.Repeat("—", 1500) + `"}]}}`))
-	}))
-	defer srv.Close()
-	c := &Client{Base: srv.URL, HTTP: srv.Client()}
-	got := c.SearchFetch(context.Background(), "x")
-	body := strings.SplitN(got, " [source:", 2)[0]
+	c := serve(t, fakeWiki{pages: map[string]string{"T—est": strings.Repeat("—", 1500)}})
+	res := c.Lookup(context.Background(), "T—est")
+	body := strings.SplitN(res.Text, " [source:", 2)[0]
 	// Title ("T—est: ") + extract cut to exactly 1200 runes = 1201 dashes.
 	if strings.Count(body, "—") != 1201 {
 		t.Fatalf("must cut extract at 1200 runes, got %d dashes", strings.Count(body, "—"))
 	}
 	if strings.ToValidUTF8(body, "") != body {
 		t.Fatal("cut must not split multibyte runes")
-	}
-}
-
-func TestSecondFetchFail(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Query().Get("list") == "search" {
-			w.Write([]byte(`{"query":{"search":[{"title":"X"}]}}`))
-			return
-		}
-		w.WriteHeader(500)
-	}))
-	defer srv.Close()
-	c := &Client{Base: srv.URL, HTTP: srv.Client()}
-	if got := c.SearchFetch(context.Background(), "x"); got != "" {
-		t.Fatalf("failed fetch must be empty: %q", got)
 	}
 }
