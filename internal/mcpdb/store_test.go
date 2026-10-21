@@ -336,3 +336,20 @@ func TestPaginate(t *testing.T) {
 		t.Fatalf("negative offset must floor at zero, got %d", got)
 	}
 }
+
+// The catalog flags unreleased patch content: the doc is recorded, but a
+// public bot must never serve it.
+func TestUpcomingStaysOutOfAnswers(t *testing.T) {
+	upcoming := bson.M{"name": "G-11 Caltrops", "upcoming": true}
+	live := bson.M{"name": "AR-11 Arbitrator"}
+	if !isUpcoming(upcoming) {
+		t.Fatal("an upcoming doc must be recognised")
+	}
+	if isUpcoming(live) {
+		t.Fatal("a live doc must not be treated as upcoming")
+	}
+	got := liveDocs([]bson.M{upcoming, live})
+	if len(got) != 1 || docName(got[0]) != "AR-11 Arbitrator" {
+		t.Fatalf("live docs = %v", got)
+	}
+}

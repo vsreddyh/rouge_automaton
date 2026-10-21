@@ -45,6 +45,35 @@ services:
     restart: unless-stopped
     depends_on:
       - mongo
+  # The gear shelves come from the public catalog API, not the wiki: the
+  # catalog is a daily snapshot of the wiki's gear pages, republished as
+  # static JSON, and it is never rate limited.
+  catalog-go:
+    image: localhost/rouge-automaton-go:latest
+    container_name: rouge-catalog-go
+    network_mode: host
+    entrypoint: ["/catalog"]
+    command: ["--interval", "24h"]
+    env_file: .env
+    environment:
+      MONGO_URI: mongodb://127.0.0.1:27017/rouge
+    restart: unless-stopped
+    depends_on:
+      - mongo
+  # The unit and world shelves come from the wiki, crawled politely: one
+  # page per shelf member, with a pause between fetches.
+  crawl-go:
+    image: localhost/rouge-automaton-go:latest
+    container_name: rouge-crawl-go
+    network_mode: host
+    entrypoint: ["/crawl"]
+    command: ["--interval", "720h", "--delay", "1s"]
+    env_file: .env
+    environment:
+      MONGO_URI: mongodb://127.0.0.1:27017/rouge
+    restart: unless-stopped
+    depends_on:
+      - mongo
   mongo:
     image: docker.io/library/mongo:7-jammy
     container_name: rouge-mongo-go

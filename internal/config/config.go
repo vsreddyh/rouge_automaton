@@ -42,6 +42,15 @@ type Config struct {
 	// XSuperClient and XSuperContact are the headers the war API requires.
 	XSuperClient  string
 	XSuperContact string
+	// WikiUserAgent identifies the crawler, the watcher and the fallback
+	// client to wiki.gg. wiki.gg rate-limits clients it cannot identify, so
+	// the default names the operator's wiki account and a reachable contact
+	// (see WIKI_USER_AGENT in .env.example).
+	WikiUserAgent string
+	// CatalogUserAgent identifies the bot to the gear catalog host. The
+	// catalog is a different host with its own rules, so it gets its own
+	// knob; an empty value keeps the catalog package's default.
+	CatalogUserAgent string
 }
 
 // getenv returns the variable's value, defaulting only when it is unset.
@@ -102,6 +111,11 @@ func Load() Config {
 		RateBurst:            getenvInt("RATE_BURST", 3),
 		XSuperClient:         getenv("X_SUPER_CLIENT", "rouge-automaton"),
 		XSuperContact:        getenv("X_SUPER_CONTACT", "admin@example.com"),
+		WikiUserAgent: getenv("WIKI_USER_AGENT",
+			"rouge-automaton-watcher (wiki account: vsreddyh; contact: shouryanreddyh@gmail.com; use=reference)"),
+		// Empty means "use the catalog package's own default": the
+		// catalog host is not the wiki, and it has its own rules.
+		CatalogUserAgent: getenv("CATALOG_USER_AGENT", ""),
 	}
 }
 
@@ -113,9 +127,16 @@ func (c Config) Allowed(userID string) bool {
 
 // DBName returns the Mongo database name from the URI path, defaulting to rouge.
 func (c Config) DBName() string {
-	u, err := url.Parse(c.MongoURI)
+	return DBNameFromURI(c.MongoURI)
+}
+
+// DBNameFromURI returns the Mongo database name from a URI path, defaulting
+// to rouge. The commands read the URI from a flag, which the config does
+// not know about, so the name is derived from the URI they were given.
+func DBNameFromURI(uri string) string {
+	u, err := url.Parse(uri)
 	if err != nil || u.Path == "" || u.Path == "/" {
 		return "rouge"
 	}
-	return strings.TrimPrefix(u.Path, "/")
+	return strings.Trim(strings.TrimPrefix(u.Path, "/"), "/")
 }

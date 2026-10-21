@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -9,7 +10,7 @@ func TestDefaults(t *testing.T) {
 	for _, k := range []string{"DISCORD_FREE_RESPONSE_CHANNELS", "DISCORD_ALLOWED_USERS",
 		"DISCORD_ALLOW_ALL_USERS", "MONGO_URI", "MODEL", "OPENCODE_GO_BASE_URL",
 		"OPENCODE_GO_API_KEY", "DISCORD_BOT_TOKEN", "HD2_API_BASE",
-		"X_SUPER_CLIENT", "X_SUPER_CONTACT"} {
+		"X_SUPER_CLIENT", "X_SUPER_CONTACT", "WIKI_USER_AGENT"} {
 		t.Setenv(k, "")
 	}
 	// Empty is set-but-empty: must be honored, not replaced by defaults.
@@ -18,7 +19,8 @@ func TestDefaults(t *testing.T) {
 		t.Fatalf("empty channels must stay empty, got %v", c.FreeResponseChannels)
 	}
 	for _, k := range []string{"DISCORD_FREE_RESPONSE_CHANNELS", "MONGO_URI", "MODEL",
-		"OPENCODE_GO_BASE_URL", "HD2_API_BASE", "X_SUPER_CLIENT", "X_SUPER_CONTACT"} {
+		"OPENCODE_GO_BASE_URL", "HD2_API_BASE", "X_SUPER_CLIENT", "X_SUPER_CONTACT",
+		"WIKI_USER_AGENT"} {
 		os.Unsetenv(k)
 	}
 	c = Load()
@@ -30,6 +32,9 @@ func TestDefaults(t *testing.T) {
 	}
 	if !c.RequireMention || !c.AutoThread {
 		t.Fatal("mention/thread defaults must be true")
+	}
+	if !strings.Contains(c.WikiUserAgent, "vsreddyh") || !strings.Contains(c.WikiUserAgent, "@") {
+		t.Fatalf("default wiki UA must name the account and a contact: %q", c.WikiUserAgent)
 	}
 	if len(c.FreeResponseChannels) != 1 {
 		t.Fatalf("default free channels = %v", c.FreeResponseChannels)

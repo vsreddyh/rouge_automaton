@@ -14,6 +14,9 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"rouge_automaton/internal/httpx"
+	"rouge_automaton/internal/wikifeed"
 )
 
 var spaces = regexp.MustCompile(`\s+`)
@@ -83,10 +86,21 @@ type Result struct {
 type Client struct {
 	Base string
 	HTTP *http.Client
+	// UA identifies the client; NewExecutor sets it from config so the
+	// fallback sends the same identified UA as the watcher.
+	UA string
 }
 
 // New returns a Client targeting the live wiki.
 func New() *Client { return &Client{} }
+
+// NewWithUA returns a client with an operator-supplied User-Agent. Empty
+// keeps the package default.
+func NewWithUA(ua string) *Client {
+	c := New()
+	c.UA = strings.TrimSpace(ua)
+	return c
+}
 
 func (c *Client) api() string {
 	if c.Base != "" {
@@ -105,6 +119,16 @@ func (c *Client) http() *http.Client {
 // sharedHTTP is the process-wide client (keep-alive, single timeout).
 var sharedHTTP = &http.Client{Timeout: 20 * time.Second}
 
+// DefaultUA is the fallback identity for the fallback client.
+const DefaultUA = "rouge-automaton (wiki account: vsreddyh; contact: shouryanreddyh@gmail.com; use=reference)"
+
+func (c *Client) userAgent() string {
+	if c.UA != "" {
+		return c.UA
+	}
+	return DefaultUA
+}
+
 func (c *Client) get(ctx context.Context, params url.Values) (map[string]any, error) {
 	params.Set("format", "json")
 	params.Set("formatversion", "2")
@@ -114,18 +138,21 @@ func (c *Client) get(ctx context.Context, params url.Values) (map[string]any, er
 		return nil, err
 	}
 	// MediaWiki asks every client to identify itself with a contact.
-	req.Header.Set("User-Agent", "rouge-automaton (+https://github.com/vsreddyh/rouge_automaton)")
+	req.Header.Set("User-Agent", c.userAgent())
 	resp, err := c.http().Do(req)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("wiki status %d", resp.StatusCode)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes))
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("wiki status %d%s", resp.StatusCode, httpx.BodySuffix(body))
 	}
 	var out map[string]any
-	// A wiki page can be huge; the bot must not OOM on one response.
-	if err := json.NewDecoder(io.LimitReader(resp.Body, maxBodyBytes)).Decode(&out); err != nil {
+	if err := json.Unmarshal(body, &out); err != nil {
 		return nil, err
 	}
 	// MediaWiki answers 200 with an error object when it refuses the
@@ -364,11 +391,7 @@ func (c *Client) summary(ctx context.Context, title string) Result {
 // title as a subpage separator, so the slashes stay and only the
 // segments are escaped.
 func pagePath(title string) string {
-	parts := strings.Split(title, "/")
-	for i, p := range parts {
-		parts[i] = url.PathEscape(strings.ReplaceAll(p, " ", "_"))
-	}
-	return strings.Join(parts, "/")
+	return wikifeed.PagePath(title)
 }
 
 func firstSearchTitle(s map[string]any) string {
