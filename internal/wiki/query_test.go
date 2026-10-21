@@ -192,12 +192,19 @@ func TestDropGameNameVariants(t *testing.T) {
 }
 
 func TestShapeDedupeSpelling(t *testing.T) {
-	// The wiki ignores case and trailing punctuation, so two spellings
-	// of one query are one request.
-	_, searches := shape("Automatons?")
-	want := []string{"Automatons?"}
-	if !equalStrings(searches, want) {
-		t.Fatalf("searches = %q, want %q", searches, want)
+	// The wiki ignores case, trailing punctuation and the flavor of the
+	// quotes, so two spellings of one query are one request.
+	for _, tc := range []struct {
+		q    string
+		want []string
+	}{
+		{"Automatons?", []string{"Automatons?"}},
+		{"“Hulk Bruiser”", []string{"“Hulk Bruiser”"}},
+	} {
+		_, searches := shape(tc.q)
+		if !equalStrings(searches, tc.want) {
+			t.Fatalf("shape(%q) searches = %q, want %q", tc.q, searches, tc.want)
+		}
 	}
 }
 

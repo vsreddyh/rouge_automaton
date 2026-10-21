@@ -213,9 +213,10 @@ func shape(raw string) (titles, searches []string) {
 	return titles, searches
 }
 
-// searchKey is the dedupe key of a search string.
+// searchKey is the dedupe key of a search string: the wiki ignores
+// case, the trailing punctuation and the flavor of the quotes.
 func searchKey(s string) string {
-	return strings.ToLower(strings.Trim(s, ".,;:!?\"'()[]{}"))
+	return strings.ToLower(strings.Trim(quoteFold.Replace(s), ".,;:!?\"'()[]{}"))
 }
 
 // dedupeBy keeps the first occurrence of each string and drops the
