@@ -314,13 +314,17 @@ func run(mongoURI, dataDir string) error {
 	// Migration (#53): pre-fix structure seeds copied note into role, which
 	// put tactical advice on roster lines. Clear only that copy — never a
 	// curated role — so an already-seeded database heals on the next ingest
-	// run. The store also drops a note-matched role at read time, so this is
-	// cleanup, not the correctness boundary.
+	// run. Fold like the read path so whitespace/case drift heals too; the
+	// store also drops a note-matched role at read time, so this is cleanup,
+	// not the correctness boundary.
 	cleared, err := db.Collection("structures").UpdateMany(ctx,
 		bson.M{
-			"role":  bson.M{"$exists": true},
-			"note":  bson.M{"$exists": true},
-			"$expr": bson.M{"$eq": []string{"$role", "$note"}},
+			"role": bson.M{"$exists": true},
+			"note": bson.M{"$exists": true},
+			"$expr": bson.M{"$eq": []any{
+				bson.M{"$toLower": bson.M{"$trim": bson.M{"input": "$role"}}},
+				bson.M{"$toLower": bson.M{"$trim": bson.M{"input": "$note"}}},
+			}},
 		},
 		bson.M{"$unset": bson.M{"role": ""}},
 	)
