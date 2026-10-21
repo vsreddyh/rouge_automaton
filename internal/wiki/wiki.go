@@ -14,6 +14,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"rouge_automaton/internal/wikifeed"
 )
 
 var spaces = regexp.MustCompile(`\s+`)
@@ -385,11 +387,7 @@ func (c *Client) summary(ctx context.Context, title string) Result {
 // title as a subpage separator, so the slashes stay and only the
 // segments are escaped.
 func pagePath(title string) string {
-	parts := strings.Split(title, "/")
-	for i, p := range parts {
-		parts[i] = url.PathEscape(strings.ReplaceAll(p, " ", "_"))
-	}
-	return strings.Join(parts, "/")
+	return wikifeed.PagePath(title)
 }
 
 func firstSearchTitle(s map[string]any) string {

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/url"
 	"sort"
 	"strings"
 	"time"
@@ -460,7 +461,9 @@ func toText(v any) string {
 	return fmt.Sprint(v)
 }
 
-// titleFromURL reads the page title back out of a wiki URL.
+// titleFromURL reads the page title back out of a wiki URL. The path is
+// escaped per segment (see wikifeed.PagePath), so it is unescaped the same
+// way: a title carrying "?" or "#" must round-trip.
 func titleFromURL(sourceURL string) string {
 	if sourceURL == "" {
 		return ""
@@ -469,7 +472,16 @@ func titleFromURL(sourceURL string) string {
 	if idx < 0 {
 		return ""
 	}
-	return strings.ReplaceAll(sourceURL[idx+len("/wiki/"):], "_", " ")
+	path := sourceURL[idx+len("/wiki/"):]
+	parts := strings.Split(path, "/")
+	for i, p := range parts {
+		if unescaped, err := url.PathUnescape(p); err == nil {
+			parts[i] = strings.ReplaceAll(unescaped, "_", " ")
+			continue
+		}
+		parts[i] = strings.ReplaceAll(p, "_", " ")
+	}
+	return strings.Join(parts, "/")
 }
 
 // cleanParams mirrors the Python crawler: drop image/caption noise and
@@ -551,7 +563,7 @@ func (w *Watcher) Backfill(ctx context.Context) (int, error) {
 			cur.Close(context.WithoutCancel(ctx))
 			return seen, fmt.Errorf("watch: backfill %s: %w", coll, err)
 		}
-		if err := cur.Close(ctx); err != nil {
+		if err := cur.Close(context.WithoutCancel(ctx)); err != nil {
 			log.Printf("watch: cursor close: %v", err)
 		}
 	}

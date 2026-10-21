@@ -54,7 +54,7 @@ func run() error {
 		return fmt.Errorf("mongo ping: %w", err)
 	}
 	cfg := config.Load()
-	db := client.Database(config.Config{MongoURI: *mongoURI}.DBName())
+	db := client.Database(config.DBNameFromURI(*mongoURI))
 	w := wikiwatch.New(db, wikifeed.NewWithUA(cfg.WikiUserAgent))
 	w.CrawlDelay = *delay
 	w.CrawlLimit = *limit

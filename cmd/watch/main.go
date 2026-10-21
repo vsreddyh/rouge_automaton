@@ -50,7 +50,7 @@ func run() error {
 	if err := client.Ping(pingCtx, readpref.Primary()); err != nil {
 		return fmt.Errorf("mongo ping: %w", err)
 	}
-	db := client.Database(config.Config{MongoURI: *mongoURI}.DBName())
+	db := client.Database(config.DBNameFromURI(*mongoURI))
 	cfg := config.Load()
 	w := wikiwatch.New(db, wikifeed.NewWithUA(cfg.WikiUserAgent))
 	w.Days, w.Limit = *days, *limit

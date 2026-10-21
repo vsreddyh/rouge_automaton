@@ -248,22 +248,11 @@ func (w *Watcher) store(ctx context.Context, shelf, title, faction string) (bool
 	return true, nil
 }
 
-// findDoc looks for a doc on a shelf by name (case-insensitively) or by the
-// wiki page it came from.
+// findDoc looks for a doc on a shelf by name (case-insensitively, the way
+// the unique name indexes compare) or by the wiki page it came from.
 func (w *Watcher) findDoc(ctx context.Context, shelf, title string) (bson.M, error) {
-	coll := w.DB.Collection(shelf)
 	var doc bson.M
-	err := coll.FindOne(ctx, bson.M{"name": title}).Decode(&doc)
-	if err == nil {
-		return doc, nil
-	}
-	if !errors.Is(err, mongo.ErrNoDocuments) {
-		return nil, err
-	}
-	// The seed's names are not always spelled exactly like the wiki's
-	// titles, so fall back to a case-insensitive match — the same
-	// collation the unique name indexes use.
-	err = coll.FindOne(ctx, bson.M{"name": title},
+	err := w.DB.Collection(shelf).FindOne(ctx, bson.M{"name": title},
 		options.FindOne().SetCollation(ciCollation)).Decode(&doc)
 	if err == nil {
 		return doc, nil

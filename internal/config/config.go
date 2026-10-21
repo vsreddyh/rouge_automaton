@@ -127,7 +127,14 @@ func (c Config) Allowed(userID string) bool {
 
 // DBName returns the Mongo database name from the URI path, defaulting to rouge.
 func (c Config) DBName() string {
-	u, err := url.Parse(c.MongoURI)
+	return DBNameFromURI(c.MongoURI)
+}
+
+// DBNameFromURI returns the Mongo database name from a URI path, defaulting
+// to rouge. The commands read the URI from a flag, which the config does
+// not know about, so the name is derived from the URI they were given.
+func DBNameFromURI(uri string) string {
+	u, err := url.Parse(uri)
 	if err != nil || u.Path == "" || u.Path == "/" {
 		return "rouge"
 	}
