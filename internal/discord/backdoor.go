@@ -149,6 +149,18 @@ func sanitizeHistory(in []gorelay.Message) []gorelay.Message {
 	return out
 }
 
+// pinLoopbackAddr closes the localhost TOCTOU: validation resolves the
+// name, but Listen would resolve it again — bind the loopback literal so
+// a resolver change between check and bind cannot swing the door. IP
+// literals pass through untouched.
+func pinLoopbackAddr(addr string) string {
+	host, port, err := net.SplitHostPort(strings.TrimSpace(addr))
+	if err != nil || !strings.EqualFold(host, "localhost") {
+		return addr
+	}
+	return net.JoinHostPort("127.0.0.1", port)
+}
+
 // bearerOK constant-time compares the request's bearer token against the
 // configured secret. The secret never reaches logs or responses — only the
 // boolean outcome does.
@@ -258,6 +270,9 @@ func (b *Bot) StartBackdoor(ctx context.Context, addr, token string) error {
 	if err := ValidateBackdoorAddr(addr); err != nil {
 		return err
 	}
+	// Bind the pinned literal, never the re-resolved name (see
+	// pinLoopbackAddr): validation and Listen must see the same loopback.
+	addr = pinLoopbackAddr(addr)
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		return fmt.Errorf("local backdoor: listen: %w", err)

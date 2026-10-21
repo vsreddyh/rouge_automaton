@@ -349,6 +349,19 @@ func TestBackdoorHistorySanitized(t *testing.T) {
 	}
 }
 
+// pinLoopbackAddr binds the literal, never the re-resolved name:
+// localhost collapses to 127.0.0.1, IP literals pass through untouched.
+func TestPinLoopbackAddr(t *testing.T) {
+	if got := pinLoopbackAddr("localhost:8099"); got != "127.0.0.1:8099" {
+		t.Fatalf("localhost must pin to the literal, got %q", got)
+	}
+	for _, addr := range []string{"127.0.0.1:8099", "[::1]:8099", "127.0.0.2:1"} {
+		if got := pinLoopbackAddr(addr); got != addr {
+			t.Fatalf("literal %q must pass through, got %q", addr, got)
+		}
+	}
+}
+
 // Session IDs are coerced to a header-safe charset: anything outside
 // [A-Za-z0-9_-] becomes "_", overlong IDs truncate, blanks generate.
 func TestBackdoorSessionCharset(t *testing.T) {
