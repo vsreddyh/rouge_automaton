@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -186,6 +187,45 @@ func TestLookupFetchFail(t *testing.T) {
 	res := c.Lookup(context.Background(), "hulk")
 	if res.Stage != StageFetchFail {
 		t.Fatalf("stage = %q, want %q", res.Stage, StageFetchFail)
+	}
+}
+
+func TestLookupApiError(t *testing.T) {
+	// MediaWiki answers 200 with an error object when it refuses the
+	// request: that is a failed fetch, not an empty page.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"error":{"code":"badtitle","info":"Bad title."}}`))
+	}))
+	defer srv.Close()
+	c := &Client{Base: srv.URL, HTTP: srv.Client()}
+	res := c.Lookup(context.Background(), "hulk")
+	if res.Stage != StageFetchFail {
+		t.Fatalf("stage = %q, want %q", res.Stage, StageFetchFail)
+	}
+}
+
+func TestLookupCapsQuery(t *testing.T) {
+	// A pathological question must not build a multi-kilobyte URL.
+	var mu sync.Mutex
+	longest := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		if n := len(r.URL.String()); n > longest {
+			longest = n
+		}
+		mu.Unlock()
+		_, _ = w.Write([]byte(`{"query":{"search":[]}}`))
+	}))
+	defer srv.Close()
+	c := &Client{Base: srv.URL, HTTP: srv.Client()}
+	res := c.Lookup(context.Background(), strings.Repeat("automatons ", 200))
+	if res.Stage != StageSearchMiss {
+		t.Fatalf("stage = %q, want %q", res.Stage, StageSearchMiss)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if longest > 2000 {
+		t.Fatalf("request URL is %d chars: the query must be capped", longest)
 	}
 }
 

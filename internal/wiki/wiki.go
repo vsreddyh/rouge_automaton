@@ -22,6 +22,10 @@ var spaces = regexp.MustCompile(`\s+`)
 // must not OOM on one answer.
 const maxBodyBytes = 2 << 20
 
+// maxQueryRunes caps the question one lookup carries: a pathological
+// query would otherwise build a multi-kilobyte URL.
+const maxQueryRunes = 300
+
 // cutRunes truncates to n runes (multibyte-safe).
 func cutRunes(s string, n int) string {
 	if r := []rune(s); len(r) > n {
@@ -111,7 +115,30 @@ func (c *Client) get(ctx context.Context, params url.Values) (map[string]any, er
 	if err := json.NewDecoder(io.LimitReader(resp.Body, maxBodyBytes)).Decode(&out); err != nil {
 		return nil, err
 	}
+	// MediaWiki answers 200 with an error object when it refuses the
+	// request; that is a failed fetch, not an empty page.
+	if apiErr, ok := out["error"]; ok {
+		return nil, fmt.Errorf("wiki api error: %s", errText(apiErr))
+	}
 	return out, nil
+}
+
+// errText renders the wiki's error object as one line.
+func errText(v any) string {
+	m, _ := v.(map[string]any)
+	if m == nil {
+		return fmt.Sprintf("%v", v)
+	}
+	code, _ := m["code"].(string)
+	info, _ := m["info"].(string)
+	switch {
+	case code != "" && info != "":
+		return code + ": " + info
+	case info != "":
+		return info
+	default:
+		return code
+	}
 }
 
 // lookupBudget caps one wiki lookup: the ladder makes several requests,
@@ -131,7 +158,7 @@ const maxRedirectHops = 5
 // StageExtractEmpty (the page resolved but carries no text). Ops read
 // the stage from the logs; the caller reads it from the Result.
 func (c *Client) Lookup(ctx context.Context, query string) Result {
-	q := normalizeQuery(query)
+	q := cutRunes(normalizeQuery(query), maxQueryRunes)
 	if q == "" {
 		return Result{Stage: StageSearchMiss}
 	}
