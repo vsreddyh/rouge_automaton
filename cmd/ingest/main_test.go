@@ -133,6 +133,56 @@ func TestCovered(t *testing.T) {
 	}
 }
 
+// TestSeedDocReservedFields: a seed bag must never carry the fields Mongo
+// or the wiki watcher own. The bag is applied first, so the reserved
+// fields are set by the ingest and the denylisted ones never arrive.
+func TestSeedDocReservedFields(t *testing.T) {
+	ds := docSeed{
+		Name:    "Orbital Railcannon Strike",
+		Aliases: []string{"Orbital Railcannon"},
+		Fields: bson.M{
+			"role":          "Support stratagem.",
+			"_id":           "seed-should-not-own-this",
+			"source":        "seed-should-not-own-this",
+			"source_url":    "seed-should-not-own-this",
+			"rev_id":        99,
+			"patch_version": "9.9.9",
+			"fetched_at":    "whenever",
+			"text_blob":     "dead weight",
+			"embedding":     []float32{0.1},
+		},
+	}
+	seed := seedDoc(ds, "data/gear.json")
+	// Denylisted fields never reach the doc.
+	for _, reserved := range []string{"_id", "fetched_at", "text_blob", "embedding"} {
+		if _, ok := seed[reserved]; ok {
+			t.Errorf("seed must not carry %q", reserved)
+		}
+	}
+	// The fields the ingest owns are set by the ingest, not the bag.
+	if seed["source"] != "data/gear.json" {
+		t.Errorf("source = %v, want data/gear.json", seed["source"])
+	}
+	if seed["source_url"] != "" {
+		t.Errorf("source_url = %v, want empty", seed["source_url"])
+	}
+	if seed["rev_id"] != 0 {
+		t.Errorf("rev_id = %v, want 0", seed["rev_id"])
+	}
+	if seed["patch_version"] != "" {
+		t.Errorf("patch_version = %v, want empty", seed["patch_version"])
+	}
+	if seed["name"] != ds.Name {
+		t.Errorf("name = %v, want %q", seed["name"], ds.Name)
+	}
+	if seed["role"] != "Support stratagem." {
+		t.Errorf("role = %v, want the seed's own field", seed["role"])
+	}
+	if aliases, ok := seed["aliases"].([]string); !ok || len(aliases) != 1 {
+		t.Errorf("aliases = %v, want the seed's own aliases", seed["aliases"])
+	}
+}
+
 // TestSeedFiles pins the shipped seed data: every file parses, every gear
 // and world shelf is populated, names are unique per collection, and no
 // doc's alias is another doc's name (an alias that shadows a name would

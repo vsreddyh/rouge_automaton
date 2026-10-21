@@ -64,6 +64,7 @@ func (d *docSeed) UnmarshalJSON(b []byte) error {
 		return err
 	}
 	d.Name = strings.TrimSpace(mcpdb.ToString(raw["name"]))
+	d.Aliases = nil
 	for _, a := range mcpdb.Values(raw["aliases"]) {
 		if a = strings.TrimSpace(a); a != "" {
 			d.Aliases = append(d.Aliases, a)
@@ -75,30 +76,58 @@ func (d *docSeed) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-// bsonify converts a decoded JSON bag into BSON-safe values: nested
-// objects become bson.M and arrays become bson.A, so a seed's nested
-// params map lands as a document instead of an opaque blob.
+// bsonifyValue converts a decoded JSON value into a BSON-safe value:
+// nested objects become bson.M and arrays become bson.A, recursively, so a
+// seed's nested params map lands as a document instead of an opaque blob.
+func bsonifyValue(v any) any {
+	switch t := v.(type) {
+	case map[string]any:
+		return bsonify(t)
+	case []any:
+		arr := make(bson.A, 0, len(t))
+		for _, item := range t {
+			arr = append(arr, bsonifyValue(item))
+		}
+		return arr
+	default:
+		return v
+	}
+}
+
+// bsonify converts a decoded JSON bag into BSON-safe values.
 func bsonify(v map[string]any) bson.M {
 	out := bson.M{}
 	for k, e := range v {
-		switch t := e.(type) {
-		case map[string]any:
-			out[k] = bsonify(t)
-		case []any:
-			arr := make(bson.A, 0, len(t))
-			for _, item := range t {
-				if m, ok := item.(map[string]any); ok {
-					arr = append(arr, bsonify(m))
-					continue
-				}
-				arr = append(arr, item)
-			}
-			out[k] = arr
-		default:
-			out[k] = e
-		}
+		out[k] = bsonifyValue(e)
 	}
 	return out
+}
+
+// reservedDocFields never come from a seed bag: Mongo owns _id, the wiki
+// watcher owns fetched_at, and text_blob and embedding are excluded from
+// every read path (the ranker that read them is gone).
+var reservedDocFields = map[string]bool{
+	"_id": true, "fetched_at": true, "text_blob": true, "embedding": true,
+}
+
+// seedDoc builds the Mongo body for one free-form seed: the field bag
+// minus the reserved fields, then the identity and provenance the ingest
+// owns. A seed must never set what Mongo or the wiki watcher owns.
+func seedDoc(ds docSeed, source string) bson.M {
+	seed := bson.M{}
+	for k, v := range ds.Fields {
+		if reservedDocFields[k] {
+			continue
+		}
+		seed[k] = v
+	}
+	seed["name"] = ds.Name
+	seed["aliases"] = ds.Aliases
+	seed["source"] = source
+	seed["source_url"] = ""
+	seed["rev_id"] = 0
+	seed["patch_version"] = ""
+	return seed
 }
 
 // docCollections are the gear and world shelves seeded as free-form docs.
@@ -376,19 +405,7 @@ func run(mongoURI, dataDir string) error {
 				if ds.Name == "" || covered(knownDocs[coll], ds.Name) {
 					continue
 				}
-				// The bag first, then the reserved fields: a seed must
-				// never set the provenance or identity the store and the
-				// wiki watcher own.
-				seed := bson.M{}
-				for k, v := range ds.Fields {
-					seed[k] = v
-				}
-				seed["name"] = ds.Name
-				seed["aliases"] = ds.Aliases
-				seed["source"] = "data/" + filepath.Base(f)
-				seed["source_url"] = ""
-				seed["rev_id"] = 0
-				seed["patch_version"] = ""
+				seed := seedDoc(ds, "data/"+filepath.Base(f))
 				// No text_blob: the fuzzy ranker that read it is gone, and
 				// findAll excludes it — seeds carry only curated fields.
 				// No fetched_at: absent until the watcher writes a real
@@ -416,18 +433,22 @@ func run(mongoURI, dataDir string) error {
 	wctx, wcancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer wcancel()
 	var upserted, matched int64
+	// Unordered writes: one bad doc must not abort the rest of a 270-doc
+	// shelf. Seed names are unique per collection (the seed-file test
+	// enforces it), so two upserts can never race for the same doc.
+	bulkOpts := options.BulkWrite().SetOrdered(false)
 	if len(unitOps) > 0 {
-		res, err := db.Collection("units").BulkWrite(wctx, unitOps)
+		res, err := db.Collection("units").BulkWrite(wctx, unitOps, bulkOpts)
 		if err != nil {
-			return err
+			return fmt.Errorf("seed units: %w", err)
 		}
 		upserted += res.UpsertedCount
 		matched += res.MatchedCount
 	}
 	if len(structOps) > 0 {
-		res, err := db.Collection("structures").BulkWrite(wctx, structOps)
+		res, err := db.Collection("structures").BulkWrite(wctx, structOps, bulkOpts)
 		if err != nil {
-			return err
+			return fmt.Errorf("seed structures: %w", err)
 		}
 		upserted += res.UpsertedCount
 		matched += res.MatchedCount
@@ -437,7 +458,7 @@ func run(mongoURI, dataDir string) error {
 		if len(ops) == 0 {
 			continue
 		}
-		res, err := db.Collection(coll).BulkWrite(wctx, ops)
+		res, err := db.Collection(coll).BulkWrite(wctx, ops, bulkOpts)
 		if err != nil {
 			return fmt.Errorf("seed %s: %w", coll, err)
 		}
