@@ -141,6 +141,9 @@ func TestTokenizeCurlyApostrophe(t *testing.T) {
 	if got := tokenize("’hello’"); !equalStrings(got, []string{"hello"}) {
 		t.Fatalf("tokens = %q, want [hello]", got)
 	}
+	if got := tokenize("“Hulk Bruiser”"); !equalStrings(got, []string{"Hulk", "Bruiser"}) {
+		t.Fatalf("tokens = %q, want [Hulk Bruiser]", got)
+	}
 }
 
 func TestTokenizeKeepsDesignations(t *testing.T) {

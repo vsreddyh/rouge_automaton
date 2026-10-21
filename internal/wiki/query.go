@@ -73,9 +73,9 @@ func tokenize(q string) []string {
 	fields := strings.Fields(q)
 	out := make([]string, 0, len(fields))
 	for _, f := range fields {
-		// A typed apostrophe is an apostrophe, and it must be folded
-		// before the trim so a quoted word keeps its quotes trimmed.
-		f = strings.ReplaceAll(f, "’", "'")
+		// Every flavor of quote is one quote, and it must be folded
+		// before the trim so a quoted word keeps its letters.
+		f = strings.NewReplacer("’", "'", "‘", "'", "“", "\"", "”", "\"").Replace(f)
 		f = strings.Trim(f, ".,;:!?\"'()[]{}")
 		f = strings.ReplaceAll(f, "|", "")
 		// Contractions carry no page signal: "what's" is the question
@@ -187,36 +187,27 @@ func shape(raw string) (titles, searches []string) {
 	// keywords, then shorter runs of them — MediaWiki ANDs every term,
 	// so a query one term too long misses a page that has the rest.
 	kw := contentKeywords(tokens)
-	searches = []string{raw}
-	if full := strings.Join(kw, " "); full != "" {
-		searches = append(searches, full)
+	if len(kw) == 0 {
+		// Nothing but question scaffolding: there is no topic to look
+		// up, so no request is worth making.
+		return nil, nil
 	}
+	searches = []string{raw}
+	searches = append(searches, strings.Join(kw, " "))
 	searches = append(searches, ngrams(kw)...)
-	searches = dedupe(searches)
+	// The wiki matches case-insensitively, so two spellings of one
+	// query would spend two slots of the retry budget.
+	searches = dedupeFold(searches)
 	if len(searches) > maxSearches {
 		searches = searches[:maxSearches]
 	}
 	return titles, searches
 }
 
-// dedupe keeps the first occurrence of each string and drops the rest,
-// preserving order.
-func dedupe(in []string) []string {
-	seen := make(map[string]bool, len(in))
-	out := make([]string, 0, len(in))
-	for _, s := range in {
-		if s == "" || seen[s] {
-			continue
-		}
-		seen[s] = true
-		out = append(out, s)
-	}
-	return out
-}
-
-// dedupeFold is dedupe with a case-insensitive key: MediaWiki resolves
-// titles that differ only in case, so keeping both would waste a slot
-// of the title batch.
+// dedupeFold keeps the first occurrence of each string and drops the
+// rest, comparing case-insensitively: MediaWiki matches titles and
+// searches whatever their case, so two spellings of one query would
+// spend two slots of the batch.
 func dedupeFold(in []string) []string {
 	seen := make(map[string]bool, len(in))
 	out := make([]string, 0, len(in))

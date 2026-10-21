@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"net/url"
@@ -16,6 +17,10 @@ import (
 )
 
 var spaces = regexp.MustCompile(`\s+`)
+
+// maxBodyBytes caps one wiki response: a page can be huge, and the bot
+// must not OOM on one answer.
+const maxBodyBytes = 2 << 20
 
 // cutRunes truncates to n runes (multibyte-safe).
 func cutRunes(s string, n int) string {
@@ -68,7 +73,7 @@ func New() *Client { return &Client{} }
 
 func (c *Client) api() string {
 	if c.Base != "" {
-		return c.Base
+		return strings.TrimSuffix(c.Base, "/")
 	}
 	return "https://helldivers.wiki.gg"
 }
@@ -101,7 +106,8 @@ func (c *Client) get(ctx context.Context, params url.Values) (map[string]any, er
 		return nil, fmt.Errorf("wiki status %d", resp.StatusCode)
 	}
 	var out map[string]any
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+	// A wiki page can be huge; the bot must not OOM on one response.
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxBodyBytes)).Decode(&out); err != nil {
 		return nil, err
 	}
 	return out, nil
@@ -303,6 +309,7 @@ func (c *Client) summary(ctx context.Context, title string) Result {
 		return Result{Title: title, Stage: StageExtractEmpty}
 	}
 	text = spaces.ReplaceAllString(text, " ")
+	text = strings.TrimSpace(text)
 	text = cutRunes(text, 1200)
 	return Result{
 		Title: title,

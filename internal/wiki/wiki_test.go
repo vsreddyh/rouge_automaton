@@ -243,6 +243,20 @@ func TestLookupEmptyQuery(t *testing.T) {
 	}
 }
 
+func TestLookupSkipsFramingOnlyQuery(t *testing.T) {
+	// A query with no topic must not reach the wiki at all.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("no request expected for a framing-only query: %s", r.URL)
+		w.WriteHeader(500)
+	}))
+	defer srv.Close()
+	c := &Client{Base: srv.URL, HTTP: srv.Client()}
+	res := c.Lookup(context.Background(), "what is it")
+	if res.Stage != StageSearchMiss {
+		t.Fatalf("stage = %q, want %q", res.Stage, StageSearchMiss)
+	}
+}
+
 func TestMultibyteTruncate(t *testing.T) {
 	c := serve(t, fakeWiki{pages: map[string]string{"T—est": strings.Repeat("—", 1500)}})
 	res := c.Lookup(context.Background(), "T—est")
