@@ -173,6 +173,34 @@ func TestDropGameName(t *testing.T) {
 	}
 }
 
+func TestDropGameNameVariants(t *testing.T) {
+	for _, tc := range []struct {
+		q    string
+		want []string
+	}{
+		{"Helldivers 2 Automatons", []string{"Automatons"}},
+		{"Helldiver 2 Automatons", []string{"Automatons"}},
+		{"Helldivers2 Automatons", []string{"Automatons"}},
+		// On its own the singular is the player, not the game.
+		{"Helldiver Automatons", []string{"Helldiver", "Automatons"}},
+	} {
+		got := dropGameName(tokenize(tc.q))
+		if !equalStrings(got, tc.want) {
+			t.Fatalf("dropGameName(%q) = %q, want %q", tc.q, got, tc.want)
+		}
+	}
+}
+
+func TestShapeDedupeSpelling(t *testing.T) {
+	// The wiki ignores case and trailing punctuation, so two spellings
+	// of one query are one request.
+	_, searches := shape("Automatons?")
+	want := []string{"Automatons?"}
+	if !equalStrings(searches, want) {
+		t.Fatalf("searches = %q, want %q", searches, want)
+	}
+}
+
 func TestDedupeFold(t *testing.T) {
 	// Titles resolve case-insensitively, so both spellings must not
 	// spend two slots of the title batch.

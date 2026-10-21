@@ -65,6 +65,9 @@ func normalizeQuery(q string) string {
 	return strings.TrimSpace(spaces.ReplaceAllString(q, " "))
 }
 
+// quoteFold turns every flavor of quote into one ASCII quote.
+var quoteFold = strings.NewReplacer("’", "'", "‘", "'", "“", "\"", "”", "\"")
+
 // tokenize splits a query into words: whitespace-separated, with
 // punctuation trimmed off the edges. Slashes stay inside a word so
 // designations ("AR-23C") and subpage titles ("Blitz Search And
@@ -73,9 +76,9 @@ func tokenize(q string) []string {
 	fields := strings.Fields(q)
 	out := make([]string, 0, len(fields))
 	for _, f := range fields {
-		// Every flavor of quote is one quote, and it must be folded
-		// before the trim so a quoted word keeps its letters.
-		f = strings.NewReplacer("’", "'", "‘", "'", "“", "\"", "”", "\"").Replace(f)
+		// The quotes are folded before the trim so a quoted word keeps
+		// its letters.
+		f = quoteFold.Replace(f)
 		f = strings.Trim(f, ".,;:!?\"'()[]{}")
 		f = strings.ReplaceAll(f, "|", "")
 		// Contractions carry no page signal: "what's" is the question
@@ -97,18 +100,24 @@ func tokenize(q string) []string {
 
 // dropGameName removes the game's own name: the fallback wiki is the
 // Helldivers 2 wiki, so every page it holds is about this game and its
-// name narrows nothing.
+// name narrows nothing. The "2" of "Helldivers 2" goes with it.
 func dropGameName(tokens []string) []string {
 	out := make([]string, 0, len(tokens))
 	for i := 0; i < len(tokens); i++ {
 		t := tokens[i]
-		if strings.EqualFold(t, "helldivers") {
-			if i+1 < len(tokens) && strings.EqualFold(tokens[i+1], "2") {
+		low := strings.ToLower(t)
+		nextIsTwo := i+1 < len(tokens) && tokens[i+1] == "2"
+		switch {
+		case low == "helldivers" || low == "helldivers2":
+			if nextIsTwo {
 				i++ // "Helldivers 2" is one name: drop the "2" with it
 			}
-			continue
+		case low == "helldiver" && nextIsTwo:
+			// "Helldiver 2" is the same name, misspelled.
+			i++
+		default:
+			out = append(out, t)
 		}
-		out = append(out, t)
 	}
 	return out
 }
@@ -195,29 +204,38 @@ func shape(raw string) (titles, searches []string) {
 	searches = []string{raw}
 	searches = append(searches, strings.Join(kw, " "))
 	searches = append(searches, ngrams(kw)...)
-	// The wiki matches case-insensitively, so two spellings of one
-	// query would spend two slots of the retry budget.
-	searches = dedupeFold(searches)
+	// The wiki matches whatever the case and the trailing punctuation,
+	// so two spellings of one query are one request.
+	searches = dedupeBy(searches, searchKey)
 	if len(searches) > maxSearches {
 		searches = searches[:maxSearches]
 	}
 	return titles, searches
 }
 
-// dedupeFold keeps the first occurrence of each string and drops the
-// rest, comparing case-insensitively: MediaWiki matches titles and
-// searches whatever their case, so two spellings of one query would
-// spend two slots of the batch.
-func dedupeFold(in []string) []string {
+// searchKey is the dedupe key of a search string.
+func searchKey(s string) string {
+	return strings.ToLower(strings.Trim(s, ".,;:!?\"'()[]{}"))
+}
+
+// dedupeBy keeps the first occurrence of each string and drops the
+// rest, comparing the strings by key.
+func dedupeBy(in []string, key func(string) string) []string {
 	seen := make(map[string]bool, len(in))
 	out := make([]string, 0, len(in))
 	for _, s := range in {
-		key := strings.ToLower(s)
-		if s == "" || seen[key] {
+		k := key(s)
+		if s == "" || seen[k] {
 			continue
 		}
-		seen[key] = true
+		seen[k] = true
 		out = append(out, s)
 	}
 	return out
+}
+
+// dedupeFold keeps the first occurrence of each string and drops the
+// rest, comparing case-insensitively.
+func dedupeFold(in []string) []string {
+	return dedupeBy(in, strings.ToLower)
 }
