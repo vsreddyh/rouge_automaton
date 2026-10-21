@@ -253,8 +253,13 @@ func TestFormatUnitRoster(t *testing.T) {
 	}
 	// Long roles cap so one wiki-grown role cannot blow a page.
 	long := bson.M{"name": "X", "role": strings.Repeat("x", 500)}
-	if got := FormatUnitRoster([]bson.M{long}); strings.Contains(got, strings.Repeat("x", rosterDescCap+1)) {
-		t.Fatalf("roster descriptor must cap at %d runes, got len %d", rosterDescCap, len(got))
+	if got := FormatUnitRoster([]bson.M{long}); strings.Contains(got, strings.Repeat("x", rosterFieldCap+1)) {
+		t.Fatalf("roster descriptor must cap at %d runes, got len %d", rosterFieldCap, len(got))
+	}
+	// A pathological watcher name caps too, so one doc cannot blow the page.
+	longName := bson.M{"name": strings.Repeat("N", 500)}
+	if got := FormatUnitRoster([]bson.M{longName}); strings.Contains(got, strings.Repeat("N", rosterFieldCap+1)) {
+		t.Fatalf("roster name must cap at %d runes, got len %d", rosterFieldCap, len(got))
 	}
 }
 
@@ -279,6 +284,10 @@ func TestFormatGearRoster(t *testing.T) {
 	// Seeded docs carry no subcategory until #58 syncs the catalog.
 	if got := FormatGearRoster([]bson.M{{"name": "Railcannon", "role": "Support stratagem."}}); got != "- Railcannon [source: mongo]" {
 		t.Fatalf("subcategory-less gear line = %q", got)
+	}
+	// A multi-valued subcategory joins instead of vanishing.
+	if got := FormatGearRoster([]bson.M{{"name": "X", "subcategory": bson.A{"assault_rifle"}}}); !strings.Contains(got, "assault rifle") {
+		t.Fatalf("array subcategory must render, got %q", got)
 	}
 	// source_url wins over the seed file, the same citation contract as
 	// FormatFull.

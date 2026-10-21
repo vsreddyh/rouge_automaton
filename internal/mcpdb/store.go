@@ -49,7 +49,7 @@ const (
 	fetchCap         = 600 // per-collection scan cap for exact/list lookups
 	defaultListLimit = 10  // roster default when the model omits limit
 	maxListLimit     = 20  // roster ceiling: one world question's worth
-	rosterDescCap    = 120 // one-line descriptor cap on a roster line
+	rosterFieldCap   = 120 // per-field cap on a roster line (name or descriptor)
 )
 
 // flat maps newlines to spaces so one doc always renders as one cited line:
@@ -435,7 +435,7 @@ func FormatUnitRoster(docs []bson.M) string {
 // line is just name + source.
 func FormatGearRoster(docs []bson.M) string {
 	return formatRoster(docs, func(d bson.M) string {
-		return strings.ReplaceAll(ToString(d["subcategory"]), "_", " ")
+		return strings.ReplaceAll(strings.Join(Values(d["subcategory"]), " "), "_", " ")
 	})
 }
 
@@ -446,9 +446,9 @@ func FormatGearRoster(docs []bson.M) string {
 func formatRoster(docs []bson.M, descriptor func(bson.M) string) string {
 	var lines []string
 	for _, d := range docs {
-		line := "- " + docName(d)
+		line := "- " + cut(docName(d), rosterFieldCap)
 		if desc := strings.TrimSpace(descriptor(d)); desc != "" {
-			line += ": " + cut(desc, rosterDescCap)
+			line += ": " + cut(desc, rosterFieldCap)
 		}
 		lines = append(lines, line+" [source: "+docSource(d)+"]")
 	}
