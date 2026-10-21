@@ -181,6 +181,12 @@ func TestSeedDocReservedFields(t *testing.T) {
 	if aliases, ok := seed["aliases"].([]string); !ok || len(aliases) != 1 {
 		t.Errorf("aliases = %v, want the seed's own aliases", seed["aliases"])
 	}
+	// A seed without aliases leaves the field out: a nil slice would
+	// encode as BSON null and sit beside arrays in the same field.
+	plain := seedDoc(docSeed{Name: "Tundra"}, "data/world.json")
+	if _, ok := plain["aliases"]; ok {
+		t.Errorf("aliases must be absent, got %v", plain["aliases"])
+	}
 }
 
 // TestSeedFiles pins the shipped seed data: every file parses, every gear

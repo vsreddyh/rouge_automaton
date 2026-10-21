@@ -122,7 +122,12 @@ func seedDoc(ds docSeed, source string) bson.M {
 		seed[k] = v
 	}
 	seed["name"] = ds.Name
-	seed["aliases"] = ds.Aliases
+	// Only set aliases when there are any: a nil slice encodes as BSON
+	// null, and an explicit null would sit beside arrays in the same
+	// field across docs.
+	if len(ds.Aliases) > 0 {
+		seed["aliases"] = ds.Aliases
+	}
 	seed["source"] = source
 	seed["source_url"] = ""
 	seed["rev_id"] = 0
@@ -353,7 +358,7 @@ func run(mongoURI, dataDir string) error {
 	for _, f := range files {
 		raw, err := os.ReadFile(f)
 		if err != nil {
-			return err
+			return fmt.Errorf("%s: %w", f, err)
 		}
 		var d dataFile
 		if err := json.Unmarshal(raw, &d); err != nil {
