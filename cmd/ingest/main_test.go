@@ -189,6 +189,24 @@ func TestSeedDocReservedFields(t *testing.T) {
 	}
 }
 
+// TestStructureDocHasNoRole pins issue #53: a structure's note is tactical
+// advice (a counter), so the seed never copies it into role. get_unit and
+// FilterUnits already fall back to note.
+func TestStructureDocHasNoRole(t *testing.T) {
+	seed := structureDoc("automatons", "data/automatons.json", structureSeed{
+		Name: "Fabricator", Note: "Destroy early.", Counters: []string{"Grenade"},
+	})
+	if _, ok := seed["role"]; ok {
+		t.Fatalf("structure seed must not carry role, got %v", seed)
+	}
+	if seed["note"] != "Destroy early." {
+		t.Errorf("note = %v, want the seed's note", seed["note"])
+	}
+	if seed["source"] != "data/automatons.json" || seed["source_url"] != "" {
+		t.Errorf("provenance = %v/%v", seed["source"], seed["source_url"])
+	}
+}
+
 // TestSeedFiles pins the shipped seed data: every file parses, every gear
 // and world shelf is populated, names are unique per collection, and no
 // doc's alias is another doc's name (an alias that shadows a name would

@@ -36,12 +36,16 @@ need data, your whole response is exactly one function call, never an
 acknowledgement. Either emit the function call or the final answer — an ack
 without a call strands the user with nothing.
 You may chain calls (e.g. list_units, then get_unit; get_unit, then
-planet_status for one planet). Every intel answer names weak point + counter
-+ source, as fully as the question needs, and ends with "Over." on its own
-beat. If a fetch misses, list-then-fetch before wiki_search; use wiki_search
-only when the store has nothing. When the query is genuinely ambiguous and
-no tool resolves it, ask one short clarifying question instead of guessing
-or looping fetches until rounds run out.`
+planet_status for one planet). Detail answers (get_unit, get_gear,
+get_place) name weak point + counter + source, as fully as the question
+needs. Roster answers (list_units, list_gear) give names and roles only:
+never volunteer weak points or counters unless asked. Tool lines carry a
+[source:] each; in your answer cite each source once, not once per line,
+and end with "Over." on its own beat. If a
+fetch misses, list-then-fetch before wiki_search; use wiki_search only when
+the store has nothing. When the query is genuinely ambiguous and no tool
+resolves it, ask one short clarifying question instead of guessing or
+looping fetches until rounds run out.`
 
 // Executor runs tool calls against Mongo and the live/wiki backends.
 type Executor struct {
@@ -97,7 +101,7 @@ func ToolDefs() []gorelay.ToolDef {
 				"name": strProp("exact gear name or alias, e.g. Orbital Railcannon"),
 			}, "name")},
 		{Name: "list_gear",
-			Description: "List one gear shelf by category (names only). Use when the gear name is unknown, then get_gear for detail.",
+			Description: "List one gear shelf by category (names, plus the type when known). Use when the gear name is unknown, then get_gear for detail.",
 			Parameters: obj(map[string]any{
 				"category": map[string]any{"type": "string", "description": "one of weapons, stratagems, armor, boosters", "enum": []string{"weapons", "stratagems", "armor", "boosters"}},
 				"limit":    limitProp,
@@ -154,7 +158,7 @@ func (e *Executor) Execute(ctx context.Context, name, argsJSON string) string {
 			return "local intel store not wired — report as unconfirmed"
 		}
 		docs := ListUnits(ctx, e.DB, faction, strArg(args, "role"), intArg(args, "limit", defaultListLimit), intArg(args, "offset", 0))
-		return withEmptyHint(FormatContext(docs))
+		return withEmptyHint(FormatUnitRoster(docs))
 	case "get_gear":
 		want := strArg(args, "name")
 		if want == "" {
@@ -176,7 +180,7 @@ func (e *Executor) Execute(ctx context.Context, name, argsJSON string) string {
 			return "local intel store not wired — report as unconfirmed"
 		}
 		docs := ListGear(ctx, e.DB, category, intArg(args, "limit", defaultListLimit), intArg(args, "offset", 0))
-		return withEmptyHint(FormatContext(docs))
+		return withEmptyHint(FormatGearRoster(docs))
 	case "get_place":
 		want := strArg(args, "name")
 		if want == "" {

@@ -191,13 +191,6 @@ func TestFormatFull(t *testing.T) {
 		!strings.Contains(got, "[source: a b]") {
 		t.Fatalf("brackets must not leak into markers, got %q", got)
 	}
-	// Roster lines cap both segments so one long doc cannot blow the page.
-	big := bson.M{"name": "X", "weak_points": bson.A{strings.Repeat("x", 500)},
-		"counters": bson.A{strings.Repeat("y", 500)}}
-	if got := FormatContext([]bson.M{big}); strings.Contains(got, strings.Repeat("x", 200)) ||
-		strings.Contains(got, strings.Repeat("y", 200)) {
-		t.Fatalf("roster lines must cap long fields, got len %d", len(got))
-	}
 	// Newline keys flatten too — a wiki infobox key must never forge a
 	// second cited line (review r4).
 	nlKey := bson.M{"name": "Mortar", "params": bson.M{"da\nmage": 120}}
@@ -211,28 +204,105 @@ func TestFormatFull(t *testing.T) {
 	if got := FormatFull(multi); strings.Contains(got, "\n") {
 		t.Fatalf("FormatFull must stay single-line, got %q", got)
 	}
-	if got := FormatContext([]bson.M{multi}); strings.Contains(got, "\n") {
-		t.Fatalf("FormatContext must stay one line per doc, got %q", got)
+}
+
+// TestFormatUnitRoster pins the issue-53 roster contract: a list line
+// carries the name, the curated role and the source — never weak points or
+// counters, so a roster answer cannot volunteer intel the user did not ask
+// for.
+func TestFormatUnitRoster(t *testing.T) {
+	trooper := bson.M{
+		"name": "Trooper", "faction": "automatons",
+		"role": "Basic infantry.", "weak_points": bson.A{"Head"},
+		"counters": bson.A{"Any primary"}, "source": "data/automatons.json",
+	}
+	got := FormatUnitRoster([]bson.M{trooper})
+	want := "- Trooper: Basic infantry. [source: data/automatons.json]"
+	if got != want {
+		t.Fatalf("unit roster line = %q, want %q", got, want)
+	}
+	for _, banned := range []string{"weak", "counter", "Head", "Any primary"} {
+		if strings.Contains(strings.ToLower(got), strings.ToLower(banned)) {
+			t.Fatalf("roster must not volunteer %q, got %q", banned, got)
+		}
+	}
+	// A structure seeded before #53 copied note into role (possibly with
+	// whitespace drift); that note is a tactic (a counter), so the roster
+	// drops it and keeps the name.
+	structure := bson.M{
+		"name": "Fabricator", "note": "Destroy early, don't waste heavies.",
+		"role": "Destroy early, don't waste heavies. ", "counters": bson.A{"Grenade"},
+		"source": "data/automatons.json",
+	}
+	got = FormatUnitRoster([]bson.M{structure})
+	if strings.Contains(got, "Destroy early") {
+		t.Fatalf("note-as-role must not reach the roster, got %q", got)
+	}
+	if !strings.Contains(got, "- Fabricator [source:") {
+		t.Fatalf("name-only structure line missing, got %q", got)
+	}
+	// A doc the watcher created has no curated role yet: name + source is
+	// the whole line, never a dangling separator.
+	if got := FormatUnitRoster([]bson.M{{"name": "New Unit", "source": "x"}}); got != "- New Unit [source: x]" {
+		t.Fatalf("role-less doc = %q", got)
+	}
+	// One flat line per doc, even when a field carries a newline.
+	multi := bson.M{"name": "Bog\nHulk", "role": "line1\nline2", "source": "seed\nfile"}
+	if got := FormatUnitRoster([]bson.M{multi}); strings.Contains(got, "\n") {
+		t.Fatalf("roster must stay one line per doc, got %q", got)
+	}
+	// Long roles cap so one wiki-grown role cannot blow a page.
+	long := bson.M{"name": "X", "role": strings.Repeat("x", 500)}
+	if got := FormatUnitRoster([]bson.M{long}); strings.Contains(got, strings.Repeat("x", rosterFieldCap+1)) {
+		t.Fatalf("roster descriptor must cap at %d runes, got len %d", rosterFieldCap, len(got))
+	}
+	// A pathological watcher name caps too, so one doc cannot blow the page.
+	longName := bson.M{"name": strings.Repeat("N", 500)}
+	if got := FormatUnitRoster([]bson.M{longName}); strings.Contains(got, strings.Repeat("N", rosterFieldCap+1)) {
+		t.Fatalf("roster name must cap at %d runes, got len %d", rosterFieldCap, len(got))
 	}
 }
 
-func TestFormatContextSegments(t *testing.T) {
-	// A gear or biome doc has no weak points: the roster line must drop
-	// the empty segment instead of rendering "weak  | counter X".
-	gear := bson.M{"name": "Orbital Railcannon Strike", "role": "Support stratagem",
-		"counters": bson.A{"one-shots a Hulk"}, "source": "data/gear.json"}
-	got := FormatContext([]bson.M{gear})
-	if strings.Contains(got, "weak") {
-		t.Fatalf("empty weak segment must be dropped, got %q", got)
+// TestFormatGearRoster pins the gear half: gear role prose is a paragraph,
+// so the roster carries the catalog subcategory instead (until the sync
+// writes one, just the name), plus the source.
+func TestFormatGearRoster(t *testing.T) {
+	gear := bson.M{
+		"name": "AR-23 Liberator", "role": "The AR-23 Liberator is a Primary Assault Rifle, available for all Helldivers.",
+		"subcategory": "assault_rifle", "counters": bson.A{"one-shots a Hulk"},
+		"source": "data/gear.json",
 	}
-	if !strings.Contains(got, "counter one-shots a Hulk") {
-		t.Fatalf("counter segment must render, got %q", got)
+	got := FormatGearRoster([]bson.M{gear})
+	if got != "- AR-23 Liberator: assault rifle [source: data/gear.json]" {
+		t.Fatalf("gear roster line = %q", got)
 	}
-	// Unit docs keep both segments, in the established order.
-	unit := bson.M{"name": "Trooper", "weak_points": bson.A{"Head"}, "counters": bson.A{"AMR"}}
-	got = FormatContext([]bson.M{unit})
-	if !strings.Contains(got, "weak Head | counter AMR") {
-		t.Fatalf("unit roster line must keep both segments, got %q", got)
+	for _, banned := range []string{"Primary Assault Rifle", "counter"} {
+		if strings.Contains(got, banned) {
+			t.Fatalf("gear roster must not carry %q, got %q", banned, got)
+		}
+	}
+	// Seeded docs carry no subcategory until #58 syncs the catalog.
+	if got := FormatGearRoster([]bson.M{{"name": "Railcannon", "role": "Support stratagem."}}); got != "- Railcannon [source: mongo]" {
+		t.Fatalf("subcategory-less gear line = %q", got)
+	}
+	// A multi-valued subcategory joins instead of vanishing.
+	if got := FormatGearRoster([]bson.M{{"name": "X", "subcategory": bson.A{"assault_rifle"}}}); !strings.Contains(got, "assault rifle") {
+		t.Fatalf("array subcategory must render, got %q", got)
+	}
+	// source_url wins over the seed file, the same citation contract as
+	// FormatFull.
+	url := bson.M{"name": "AR-23 Liberator", "source_url": "https://helldivers.wiki.gg/wiki/AR-23_Liberator", "source": "data/gear.json"}
+	if got := FormatGearRoster([]bson.M{url}); !strings.Contains(got, "https://helldivers.wiki.gg/wiki/AR-23_Liberator") {
+		t.Fatalf("roster must cite source_url, got %q", got)
+	}
+}
+
+func TestFormatRosterEmpty(t *testing.T) {
+	if got := FormatUnitRoster(nil); got != "" {
+		t.Fatalf("empty roster = %q", got)
+	}
+	if got := FormatGearRoster(nil); got != "" {
+		t.Fatalf("empty gear roster = %q", got)
 	}
 }
 

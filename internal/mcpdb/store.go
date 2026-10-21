@@ -49,6 +49,7 @@ const (
 	fetchCap         = 600 // per-collection scan cap for exact/list lookups
 	defaultListLimit = 10  // roster default when the model omits limit
 	maxListLimit     = 20  // roster ceiling: one world question's worth
+	rosterFieldCap   = 120 // per-field cap on a roster line (name or descriptor)
 )
 
 // flat maps newlines to spaces so one doc always renders as one cited line:
@@ -417,43 +418,56 @@ func docSource(d bson.M) string {
 	return "mongo"
 }
 
-// FormatContext renders retrieved docs as cited context lines for the
-// system prompt. Every line carries weak point + counter + source, which is
-// what lets the model answer with citations instead of bare assertions.
-// Field fallbacks (effect_text, procurement) exist because gear and booster
-// docs use different schemas than unit docs. Lists ride on this short shape;
-// single exact fetches use FormatFull for the richer excerpt. Segments with
-// no data are dropped rather than rendered empty: a gear or biome doc has
-// no weak points, and "weak  | counter X" reads like missing intel.
-func FormatContext(docs []bson.M) string {
+// FormatUnitRoster renders the unit/structure roster: name, the curated
+// role when the doc has one, and the source. Structures seeded before #53
+// copied note into role, and note is tactical advice rather than a role, so
+// that copy is treated as absent. Weak points and counters never ride a
+// roster line: list tools answer "what is out there", get_* carries the
+// detail, and the model cannot volunteer intel it was never handed.
+func FormatUnitRoster(docs []bson.M) string {
+	return formatRoster(docs, rosterRole)
+}
+
+// FormatGearRoster renders a gear shelf: name, the catalog's subcategory
+// when the sync writes one, and the source. Gear "role" fields are prose
+// (130+ runes on average), so they stay out of the roster — get_gear
+// carries them. Until #58 syncs the catalog, subcategory is absent and a
+// line is just name + source.
+func FormatGearRoster(docs []bson.M) string {
+	return formatRoster(docs, func(d bson.M) string {
+		return strings.ReplaceAll(strings.Join(Values(d["subcategory"]), " "), "_", " ")
+	})
+}
+
+// formatRoster renders one flat cited line per doc with at most one
+// descriptor. Shared by both shelves so the "no weak/counter in a roster"
+// contract lives in one place; the descriptor callback picks the field the
+// shelf can carry.
+func formatRoster(docs []bson.M, descriptor func(bson.M) string) string {
 	var lines []string
 	for _, d := range docs {
-		src := docSource(d)
-		weak := strings.Join(strList(d, "weak_points"), " ")
-		if weak == "" {
-			weak = ToString(d["effect_text"])
+		line := "- " + cut(docName(d), rosterFieldCap)
+		if desc := strings.TrimSpace(descriptor(d)); desc != "" {
+			line += ": " + cut(desc, rosterFieldCap)
 		}
-		counters := strings.Join(strList(d, "counters"), " ")
-		if counters == "" {
-			counters = ToString(d["procurement"])
-		}
-		// Roster lines ride 20-up in one tool result: cap both segments
-		// like FormatFull so one long wiki-crawled doc cannot blow the
-		// prompt budget for the whole page.
-		var segments []string
-		if weak != "" {
-			segments = append(segments, "weak "+cut(weak, 150))
-		}
-		if counters != "" {
-			segments = append(segments, "counter "+cut(counters, 150))
-		}
-		line := "- " + docName(d)
-		if len(segments) > 0 {
-			line += ": " + strings.Join(segments, " | ")
-		}
-		lines = append(lines, line+" [source: "+src+"]")
+		lines = append(lines, line+" [source: "+docSource(d)+"]")
 	}
 	return strings.Join(lines, "\n")
+}
+
+// rosterRole returns the role a unit roster line may carry. A role that
+// folds to note is the pre-#53 structure seed copy, not curated role text;
+// a roster must not surface it. Fold rather than compare bytes so a stray
+// space or case drift cannot re-leak the copy.
+func rosterRole(d bson.M) string {
+	role := ToString(d["role"])
+	if role == "" {
+		return ""
+	}
+	if note := ToString(d["note"]); note != "" && normalize(role) == normalize(note) {
+		return ""
+	}
+	return role
 }
 
 // FormatFull renders one exact-match doc as a rich cited excerpt: role or

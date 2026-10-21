@@ -66,7 +66,7 @@ podman run --rm --network=host -e MONGO_URI=mongodb://127.0.0.1:27017/rouge \
 - Mention-gated replies (`require_mention: true`), `auto_thread: true`: a mention opens a thread and the answer lands inside it — follow-ups in threads the bot opened or has spoken in answer without a fresh mention (same relay session, keyed by thread ID). Strangers' threads still need a mention. Outside threads, a mention is required; configured free-response channels answer without a mention (each costs a model call — keep the list short).
 - Greetings (`hi`/`hello`/`hey`, also `yo`/`o7`): answered by the model in voice, whatever fits the moment — no canned line, no helpdesk menu, no "state target".
 - War-status questions (`what's the war status`, `how goes the front`) get a live summary of active fronts — no planet name required.
-- Every intel answer: weak point + counter + source (Mongo doc or live link), as fully as the question needs (no word cap; the 2000-rune Discord cut is the transport limit).
+- Detail intel answers: weak point + counter + source (Mongo doc or live link), as fully as the question needs; roster answers (`list_units`, `list_gear`) give names and roles only and never volunteer weaknesses or counters (no word cap; the 2000-rune Discord cut is the transport limit).
 - Genuinely ambiguous questions with no tool to resolve them get one short clarifying question instead of a guess; anything a tool already covers is answered directly.
 
 ## Answer pipeline
@@ -80,7 +80,9 @@ podman run --rm --network=host -e MONGO_URI=mongodb://127.0.0.1:27017/rouge \
    `war_status` (generic live war summary: active fronts per faction,
    hottest battles, divers deployed), `planet_status` (one named planet's
    live data). Aliases resolve server-side; exact fetch returns the full
-   doc (role, weak points, counters, source). Every answer cites its source.
+   doc (role, weak points, counters, source), while list tools return a
+   roster line (name, role or gear type, source). Every answer cites its
+   source once.
 3. Miss → the model falls back to `wiki_search` (`helldivers.wiki.gg`),
    summarized with links. The query is shaped server-side: framing words
    ("what is", "vs") are dropped, exact page titles are tried first, and
