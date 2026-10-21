@@ -45,6 +45,23 @@ func TestParse(t *testing.T) {
 	}
 }
 
+// The warbonds file reports superCreditsClaimable as a number upstream,
+// not a bool: the context collection must still parse.
+func TestParseWarbondsNumericClaim(t *testing.T) {
+	raw := `{"meta": {"dataVersion": "2026-10-21.xyz", "count": 3}, "data": [
+	  {"id": "wb-1", "name": "Warbond One", "type": "warbond", "superCreditsClaimable": 300},
+	  {"id": "wb-2", "name": "Warbond Two", "type": "warbond", "superCreditsClaimable": true},
+	  {"id": "wb-3", "name": "Warbond Three", "type": "warbond"}
+	]}`
+	snap, err := Parse([]byte(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snap.Count() != 3 {
+		t.Fatalf("count = %d, want 3", snap.Count())
+	}
+}
+
 func TestShelfForCollection(t *testing.T) {
 	for coll, want := range map[string]string{
 		"weapons": "weapons", "stratagems": "stratagems", "boosters": "boosters",
