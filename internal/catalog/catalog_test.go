@@ -60,6 +60,15 @@ func TestParseWarbondsNumericClaim(t *testing.T) {
 	if snap.Count() != 3 {
 		t.Fatalf("count = %d, want 3", snap.Count())
 	}
+	if got, want := snap.Items[0].SuperCreditsClaim, 300.0; got != want {
+		t.Fatalf("items[0].SuperCreditsClaim = %#v, want %#v", got, want)
+	}
+	if got, want := snap.Items[1].SuperCreditsClaim, true; got != want {
+		t.Fatalf("items[1].SuperCreditsClaim = %#v, want %#v", got, want)
+	}
+	if snap.Items[2].SuperCreditsClaim != nil {
+		t.Fatalf("items[2].SuperCreditsClaim = %#v, want nil", snap.Items[2].SuperCreditsClaim)
+	}
 }
 
 func TestShelfForCollection(t *testing.T) {
