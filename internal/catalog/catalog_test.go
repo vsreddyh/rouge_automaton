@@ -45,6 +45,32 @@ func TestParse(t *testing.T) {
 	}
 }
 
+// The warbonds file reports superCreditsClaimable as a number upstream,
+// not a bool: the context collection must still parse.
+func TestParseWarbondsNumericClaim(t *testing.T) {
+	raw := `{"meta": {"dataVersion": "2026-10-21.xyz", "count": 3}, "data": [
+	  {"id": "wb-1", "name": "Warbond One", "type": "warbond", "superCreditsClaimable": 300},
+	  {"id": "wb-2", "name": "Warbond Two", "type": "warbond", "superCreditsClaimable": true},
+	  {"id": "wb-3", "name": "Warbond Three", "type": "warbond"}
+	]}`
+	snap, err := Parse([]byte(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snap.Count() != 3 {
+		t.Fatalf("count = %d, want 3", snap.Count())
+	}
+	if got, want := snap.Items[0].SuperCreditsClaim, 300.0; got != want {
+		t.Fatalf("items[0].SuperCreditsClaim = %#v, want %#v", got, want)
+	}
+	if got, want := snap.Items[1].SuperCreditsClaim, true; got != want {
+		t.Fatalf("items[1].SuperCreditsClaim = %#v, want %#v", got, want)
+	}
+	if snap.Items[2].SuperCreditsClaim != nil {
+		t.Fatalf("items[2].SuperCreditsClaim = %#v, want nil", snap.Items[2].SuperCreditsClaim)
+	}
+}
+
 func TestShelfForCollection(t *testing.T) {
 	for coll, want := range map[string]string{
 		"weapons": "weapons", "stratagems": "stratagems", "boosters": "boosters",

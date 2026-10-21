@@ -118,10 +118,11 @@ type Item struct {
 	// Passives.
 	Effects []string `json:"effects"`
 
-	// Warbonds.
+	// Warbonds. superCreditsClaimable drifts upstream (bool one day, a
+	// number the next) and is context only, so it stays loosely typed.
 	Type              string `json:"type"`
 	ReleaseDate       string `json:"releaseDate"`
-	SuperCreditsClaim bool   `json:"superCreditsClaimable"`
+	SuperCreditsClaim any    `json:"superCreditsClaimable"`
 
 	// Traits.
 	WeaponIDs    []string `json:"weaponIds"`
