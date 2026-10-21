@@ -143,13 +143,14 @@ func (w *Watcher) requeue(titles []string) {
 
 // discoverOne routes one unseen page, fetches it and files it.
 func (w *Watcher) discoverOne(ctx context.Context, title string, index *catalog.Index) (bool, error) {
-	// A page the store already knows (a gear doc the catalog synced, a
-	// seed that was never tracked) needs no wiki call to place.
-	shelf, ok := w.shelfForDoc(ctx, title)
+	// Gear is routed from the catalog: it knows every gear page, and the
+	// index is already in memory, so this costs nothing.
+	shelf, ok := index.Shelf(title)
 	if !ok {
-		// Gear is routed from the catalog: it knows every gear page, and
-		// it needs no wiki call to say so.
-		shelf, ok = index.Shelf(title)
+		// A page the store already knows (a gear doc the catalog synced
+		// under another name, a seed that was never tracked) needs no
+		// wiki call to place.
+		shelf, ok = w.shelfForDoc(ctx, title)
 	}
 	if !ok {
 		// The wiki's own categories are the one thing the catalog cannot
@@ -181,13 +182,18 @@ func (w *Watcher) shelfForDoc(ctx context.Context, title string) (string, bool) 
 	}
 	for _, shelf := range Shelves {
 		count, err := w.DB.Collection(shelf).CountDocuments(ctx,
-			bson.M{"name": title}, options.Count().SetLimit(1))
+			bson.M{"name": title},
+			options.Count().SetLimit(1).SetCollation(ciCollation))
 		if err == nil && count > 0 {
 			return shelf, true
 		}
 	}
 	return "", false
 }
+
+// ciCollation matches names the way the unique name indexes do: case
+// insensitively, so a case-drifted doc is still the same doc.
+var ciCollation = &options.Collation{Locale: "en", Strength: 2}
 
 // store fetches a page, writes the doc (creating it when the shelf has no
 // doc for it) and registers the page for future refreshes.
@@ -225,7 +231,7 @@ func (w *Watcher) store(ctx context.Context, shelf, title, faction string) (bool
 		if _, err := w.DB.Collection(shelf).UpdateOne(ctx,
 			bson.M{"name": canonical},
 			bson.M{"$set": set},
-			options.UpdateOne().SetUpsert(true)); err != nil {
+			options.UpdateOne().SetUpsert(true).SetCollation(ciCollation)); err != nil {
 			return false, err
 		}
 		log.Printf("watch: new %s %s (%s)", shelf, canonical, sourceURL)
@@ -258,7 +264,7 @@ func (w *Watcher) findDoc(ctx context.Context, shelf, title string) (bson.M, err
 	// titles, so fall back to a case-insensitive match — the same
 	// collation the unique name indexes use.
 	err = coll.FindOne(ctx, bson.M{"name": title},
-		options.FindOne().SetCollation(&options.Collation{Locale: "en", Strength: 2})).Decode(&doc)
+		options.FindOne().SetCollation(ciCollation)).Decode(&doc)
 	if err == nil {
 		return doc, nil
 	}

@@ -246,7 +246,7 @@ func (c *Client) Fetch(ctx context.Context, coll, etag string) (FetchResult, err
 		return FetchResult{ETag: newETag, NotModified: true}, nil
 	}
 	if resp.StatusCode != http.StatusOK {
-		return FetchResult{}, fmt.Errorf("catalog %s status %d", coll, resp.StatusCode)
+		return FetchResult{}, fmt.Errorf("catalog %s status %d%s", coll, resp.StatusCode, bodySnippet(body))
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes))
 	if err != nil {
@@ -257,6 +257,20 @@ func (c *Client) Fetch(ctx context.Context, coll, etag string) (FetchResult, err
 		return FetchResult{}, err
 	}
 	return FetchResult{Snapshot: snap, ETag: newETag}, nil
+}
+
+// bodySnippet keeps a short piece of an error body: a proxy error says
+// why, and the reason is worth the log line.
+func bodySnippet(body []byte) string {
+	s := strings.TrimSpace(string(body))
+	if s == "" {
+		return ""
+	}
+	s = strings.ReplaceAll(s, "\n", " ")
+	if len(s) > 200 {
+		s = s[:200]
+	}
+	return ": " + s
 }
 
 // normalize folds a name for matching: lower case, trimmed, underscores and

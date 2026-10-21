@@ -97,7 +97,10 @@ func (w *Watcher) Crawl(ctx context.Context) ([]CrawlResult, error) {
 			if _, err := w.DB.Collection(shelf).UpdateOne(ctx,
 				bson.M{"_id": doc["_id"]},
 				bson.M{"$set": set}); err != nil {
-				return results, err
+				// One bad write must not cost the rest of the crawl.
+				res.Failed++
+				log.Printf("watch: crawl %s %s: %v", shelf, title, err)
+				continue
 			}
 			if err := w.track(ctx, canonical, sourceURL, shelf, page.RevID); err != nil {
 				log.Printf("watch: track %s: %v", canonical, err)

@@ -94,8 +94,8 @@ func report(results []catalog.Result, err error) error {
 			}
 			continue
 		}
-		fmt.Printf("catalog: %s items=%d updated=%d unchanged=%d new=%d removed=%d mismatches=%d\n",
-			r.Shelf, r.Items, r.Updated, r.Unchanged, r.New, r.Removed, r.Mismatches)
+		fmt.Printf("catalog: %s items=%d updated=%d unchanged=%d new=%d removed=%d mismatches=%d failed=%d\n",
+			r.Shelf, r.Items, r.Updated, r.Unchanged, r.New, r.Removed, r.Mismatches, r.Failed)
 		if r.Err != "" {
 			log.Printf("catalog: %s: %s", r.Shelf, r.Err)
 		}

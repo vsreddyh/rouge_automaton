@@ -144,17 +144,24 @@ func (w *Watcher) Poll(ctx context.Context) ([]Change, error) {
 	var changes []Change
 	tracked := map[string]Tracked{}
 	var order []string
+	var wanted []string
 	for _, e := range entries {
 		title := strings.TrimSpace(e.Title)
 		if title == "" || strings.Contains(title, ":") {
 			continue
 		}
-		tr, ok, err := w.Tracked(ctx, title)
-		if err != nil {
-			// The store is unreachable: do not queue the page for
-			// discovery, that would spend wiki requests on a guess.
-			return nil, err
-		}
+		wanted = append(wanted, title)
+	}
+	// One query for the whole feed: the store is round-trip bound, and a
+	// poll asks about every entry the feed carried.
+	rows, err := w.trackedRows(ctx, wanted)
+	if err != nil {
+		// The store is unreachable: do not queue the pages for
+		// discovery, that would spend wiki requests on a guess.
+		return nil, err
+	}
+	for _, title := range wanted {
+		tr, ok := rows[title]
 		if !ok {
 			// An article the watcher has never seen: it may be new
 			// content, and it is placed on a shelf by the discovery pass.
@@ -197,6 +204,38 @@ func (w *Watcher) Poll(ctx context.Context) ([]Change, error) {
 		changes = append(changes, Change{Tracked: tr, Canonical: canon, NewRev: rev.RevID})
 	}
 	return changes, nil
+}
+
+// trackedRows reads the tracked_pages rows for a batch of titles. The rows
+// that do not exist are simply absent from the map: an unseen page is new
+// content, and the discovery pass places it.
+func (w *Watcher) trackedRows(ctx context.Context, titles []string) (map[string]Tracked, error) {
+	out := map[string]Tracked{}
+	if len(titles) == 0 {
+		return out, nil
+	}
+	cur, err := w.DB.Collection("tracked_pages").Find(ctx,
+		bson.M{"title": bson.M{"$in": titles}},
+		options.Find().SetProjection(bson.M{"title": 1, "collection": 1, "rev_id": 1}))
+	if err != nil {
+		return nil, err
+	}
+	defer cur.Close(context.WithoutCancel(ctx))
+	for cur.Next(ctx) {
+		var doc bson.M
+		if err := cur.Decode(&doc); err != nil {
+			log.Printf("watch: tracked_pages decode: %v", err)
+			continue
+		}
+		tr := trackedFrom(doc)
+		if tr.Title != "" {
+			out[tr.Title] = tr
+		}
+	}
+	if err := cur.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // contains reports whether the slice holds the value.

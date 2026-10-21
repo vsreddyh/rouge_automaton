@@ -62,6 +62,8 @@ type Result struct {
 	// Mismatches counts docs whose curated fields disagree with the
 	// catalog. The disagreement is reported, never applied.
 	Mismatches int
+	// Failed counts docs the sync could not write.
+	Failed int
 	// Err carries a shelf-level failure (the shelf was left untouched).
 	Err string
 }
@@ -211,6 +213,7 @@ func Sync(ctx context.Context, opts Options) ([]Result, error) {
 		res.Items = len(merged)
 		st, err := applyShelf(ctx, opts.DB, shelf, merged, info, version, opts.now())
 		res.Updated, res.Unchanged, res.New, res.Removed, res.Mismatches = st.updated, st.unchanged, st.new, st.removed, st.mismatches
+		res.Failed = st.failed
 		if err != nil {
 			return results, err
 		}
@@ -374,6 +377,7 @@ type stats struct {
 	new        int
 	removed    int
 	mismatches int
+	failed     int
 }
 
 // applyShelf writes one shelf's items into Mongo.
@@ -435,7 +439,10 @@ func applyShelf(ctx context.Context, db *mongo.Database, shelf string, items []I
 				bson.M{"$set": seed},
 				options.UpdateOne().SetUpsert(true))
 			if err != nil {
-				return st, fmt.Errorf("catalog %s %s: %w", shelf, it.Name, err)
+				// One bad write must not cost the whole shelf.
+				st.failed++
+				log.Printf("catalog: %s %s: %v", shelf, it.Name, err)
+				continue
 			}
 			st.new++
 			continue
@@ -450,7 +457,10 @@ func applyShelf(ctx context.Context, db *mongo.Database, shelf string, items []I
 			bson.M{"_id": (*doc)["_id"]},
 			bson.M{"$set": set})
 		if err != nil {
-			return st, fmt.Errorf("catalog %s %s: %w", shelf, it.Name, err)
+			// One bad write must not cost the whole shelf.
+			st.failed++
+			log.Printf("catalog: %s %s: %v", shelf, it.Name, err)
+			continue
 		}
 		if res.ModifiedCount > 0 {
 			st.updated++
