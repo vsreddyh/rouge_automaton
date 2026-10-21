@@ -167,8 +167,10 @@ func (e *Executor) Execute(ctx context.Context, name, argsJSON string) string {
 		if e.DB == nil {
 			return "local intel store not wired — report as unconfirmed"
 		}
-		if doc, _, ok := GetGear(ctx, e.DB, want); ok {
+		if doc, _, upcoming := getGearScanned(ctx, e.DB, want); doc != nil {
 			return FormatFull(doc)
+		} else if upcoming {
+			return upcomingLine(want)
 		}
 		return "no local intel for that name — try list_gear for the canonical shelf, or wiki_search"
 	case "list_gear":

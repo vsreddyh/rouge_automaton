@@ -1,0 +1,34 @@
+Rouge Automaton — attribution notice
+====================================
+
+The code in this repository is the author's own work, licensed under
+the GNU Affero General Public License v3.0 or later (see LICENSE).
+
+The intel content is not. It is adapted from the following sources,
+and it carries its own licence (see DATA-LICENSE):
+
+- The Helldivers Wiki (https://helldivers.wiki.gg), licensed under
+  Creative Commons Attribution-NonCommercial-ShareAlike 4.0
+  International (CC BY-NC-SA 4.0). Unit weak points and counters,
+  structures, gear descriptions and world intel in
+  skills/rouge-automaton/data/*.json are adaptations of wiki pages.
+  Every synced Mongo doc carries the wiki page it came from
+  (source_url), and every intel answer cites that page, so the
+  attribution reaches the reader, not just the operator.
+
+- The Helldivers 2 Data API (https://helldivers-api.dionatha.com.br),
+  a public gear catalog that republishes the wiki's gear pages as
+  static JSON. The gear shelves (weapons, stratagems, armor,
+  boosters) sync from this catalog, which itself reshapes wiki
+  content — so catalog-derived docs are wiki-derived too, under the
+  same CC BY-NC-SA 4.0 terms.
+
+- The Helldivers Training Manual live war API, which serves the live
+  galactic war state (war_status / planet_status answers). Live data
+  is summarised at answer time, never stored.
+
+The non-commercial clause matters: this bot is free and
+non-commercial. If it is ever monetised (ads, paid tiers,
+sponsorships tied to it, a monetised community), the wiki's
+permission is needed first — the AGPL on the code does not cover
+the data.

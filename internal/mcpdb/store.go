@@ -338,27 +338,47 @@ func ListUnits(ctx context.Context, db *mongo.Database, faction, role string, li
 	return paginate(out, limit, offset)
 }
 
+// getGearScanned runs one bounded scan over the gear shelves and reports
+// the live doc for name, or whether name matches only an upcoming doc.
+// One pass: a miss costs 4 fetches, and a doc going live mid-scan cannot
+// flip the answer between two rounds. The Mongo filter is empty and the
+// upcoming check stays in Go, so the "true" string shape isUpcoming
+// handles is never missed by a query-level filter.
+func getGearScanned(ctx context.Context, db *mongo.Database, name string) (doc bson.M, coll string, upcoming bool) {
+	if normalize(name) == "" || db == nil {
+		return nil, "", false
+	}
+	for i, docs := range fetchAll(ctx, db, GearCollections, bson.M{}, fetchCap) {
+		for _, d := range docs {
+			if !isExactMatch(d, name) {
+				continue
+			}
+			if isUpcoming(d) {
+				upcoming = true
+				continue
+			}
+			return d, GearCollections[i], false
+		}
+	}
+	return nil, "", upcoming
+}
+
 // GetGear fetches one gear doc by exact name or alias across the four gear
 // collections. Returns the doc, the collection (category) that held it, and
 // whether it was found. Same small-scale scan contract as GetUnit: bounded
 // fetches plus Go exact-match; the unique name indexes enforce identity.
+// Docs the catalog flags as not-yet-live are never returned (see
+// getGearScanned); callers that must tell "unreleased" from "unknown" use
+// getGearScanned directly.
 func GetGear(ctx context.Context, db *mongo.Database, name string) (bson.M, string, bool) {
 	if normalize(name) == "" || db == nil {
 		return nil, "", false
 	}
-	// Same deterministic tie-break as GetUnit: name order within the
-	// shelf, shelves in GearCollections order.
-	for i, docs := range fetchAll(ctx, db, GearCollections, liveFilter, fetchCap) {
-		for _, d := range docs {
-			if isUpcoming(d) {
-				continue
-			}
-			if isExactMatch(d, name) {
-				return d, GearCollections[i], true
-			}
-		}
+	doc, coll, _ := getGearScanned(ctx, db, name)
+	if doc == nil {
+		return nil, "", false
 	}
-	return nil, "", false
+	return doc, coll, true
 }
 
 // ListGear returns the roster of one gear category, paged by limit/offset
@@ -397,6 +417,15 @@ func liveDocs(docs []bson.M) []bson.M {
 		out = append(out, d)
 	}
 	return out
+}
+
+// upcomingLine renders the "not in this build yet" answer for an
+// unreleased item name. The name is model-supplied, so it is
+// bracket-stripped and rune-capped like every other rendered value: a
+// "[source: …]" inside it must not forge a citation marker, and its
+// length must not bloat the tool output.
+func upcomingLine(want string) string {
+	return cut(noBrackets(want), rosterFieldCap) + " is not in this build yet — unreleased patch content, stats withheld; report it as unreleased, never guess its stats"
 }
 
 // GetPlace fetches one static world doc (biome, planet, mission,
