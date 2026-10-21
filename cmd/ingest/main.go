@@ -280,7 +280,7 @@ func run(mongoURI, dataDir string) error {
 	}
 	client, err := mongo.Connect(options.Client().ApplyURI(mongoURI))
 	if err != nil {
-		return err
+		return fmt.Errorf("mongo connect: %w", err)
 	}
 	defer client.Disconnect(context.Background())
 	pingCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
