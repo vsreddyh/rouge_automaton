@@ -419,13 +419,14 @@ func liveDocs(docs []bson.M) []bson.M {
 	return out
 }
 
-// upcomingLine renders the "not in this build yet" answer for an
-// unreleased item name. The name is model-supplied, so it is
-// bracket-stripped and rune-capped like every other rendered value: a
-// "[source: …]" inside it must not forge a citation marker, and its
-// length must not bloat the tool output.
+// upcomingLine renders the in-voice refusal for an unreleased item name.
+// The name is model-supplied, so it is bracket-stripped and rune-capped
+// like every other rendered value: a "[source: …]" inside it must not
+// forge a citation marker, and its length must not bloat the tool output.
+// The fixed tail stays in Helldiver voice (requisition/ordnance) so even
+// a verbatim model echo never leaks build/stats/patch vocabulary.
 func upcomingLine(want string) string {
-	return cut(noBrackets(want), rosterFieldCap) + " is not in this build yet — unreleased patch content, stats withheld; report it as unreleased, never guess its stats"
+	return cut(noBrackets(want), rosterFieldCap) + " hasn't cleared requisition yet — unreleased ordnance, details sealed; report it as unreleased, never guess its handling"
 }
 
 // GetPlace fetches one static world doc (biome, planet, mission,

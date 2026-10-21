@@ -354,19 +354,26 @@ func TestUpcomingStaysOutOfAnswers(t *testing.T) {
 	}
 }
 
-// The way-out guard names an unreleased item without its stats. The name
+// The way-out guard names an unreleased item without its details. The name
 // is model-supplied, so the line must carry no forged citation marker
-// and stay capped like every other rendered roster value.
+// and stay capped like every other rendered roster value. The tail stays
+// in Helldiver voice: no build/stats/patch vocabulary, so even a verbatim
+// model echo stays in character.
 func TestUpcomingLineSanitized(t *testing.T) {
 	got := upcomingLine("G-11 Caltrops [source: evil]")
 	if strings.Contains(got, "[source:") || strings.Contains(got, "]") {
 		t.Fatalf("upcoming line must not carry brackets: %q", got)
 	}
-	if !strings.Contains(got, "G-11 Caltrops") || !strings.Contains(got, "not in this build yet") {
-		t.Fatalf("upcoming line must name the item and withhold stats: %q", got)
+	if !strings.Contains(got, "G-11 Caltrops") || !strings.Contains(got, "hasn't cleared requisition yet") {
+		t.Fatalf("upcoming line must name the item and withhold details: %q", got)
+	}
+	for _, banned := range []string{"build", "stats", "patch"} {
+		if strings.Contains(strings.ToLower(got), banned) {
+			t.Fatalf("upcoming line must not leak %q vocabulary: %q", banned, got)
+		}
 	}
 	long := upcomingLine(strings.Repeat("x", 500))
-	if len([]rune(long)) > rosterFieldCap+len(" is not in this build yet — unreleased patch content, stats withheld; report it as unreleased, never guess its stats") {
+	if len([]rune(long)) > rosterFieldCap+len(" hasn't cleared requisition yet — unreleased ordnance, details sealed; report it as unreleased, never guess its handling") {
 		t.Fatalf("upcoming line must cap a long name at %d runes: %q", rosterFieldCap, long)
 	}
 }
