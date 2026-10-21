@@ -5,8 +5,10 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"rouge_automaton/internal/config"
+	"rouge_automaton/internal/persona"
 	"rouge_automaton/internal/ratelimit"
 )
 
@@ -56,6 +58,78 @@ func TestCutRunes(t *testing.T) {
 	}
 	if cutRunes("hi", 5) != "hi" {
 		t.Fatal("short string must pass through")
+	}
+}
+
+// boundModelReply must cap long model output at 1900 runes on a line
+// boundary with an in-voice trailer, and pass short replies through
+// untouched so the 100-rune path stays byte-identical to cutRunes+Postprocess.
+func TestBoundModelReply(t *testing.T) {
+	// Short replies pass through untouched.
+	if got := boundModelReply("hi"); got != "hi" {
+		t.Fatalf("short must pass through: %q", got)
+	}
+	if got := boundModelReply(strings.Repeat("a", 100)); len(got) != 100 {
+		t.Fatalf("100-rune reply must pass through untouched, got %d runes", utf8.RuneCountInString(got))
+	}
+	// Exact budget passes through untouched.
+	exact := strings.Repeat("b", modelReplyBudget)
+	if got := boundModelReply(exact); got != exact {
+		t.Fatal("exact-budget reply must pass through untouched")
+	}
+	// One-line overrun hard-cuts at the budget plus trailer.
+	longLine := strings.Repeat("c", modelReplyBudget+100)
+	got := boundModelReply(longLine)
+	if !strings.HasSuffix(got, truncationTrailer) {
+		t.Fatalf("truncated reply must end with trailer: %q", got[len(got)-60:])
+	}
+	head := strings.TrimSuffix(got, "\n\n"+truncationTrailer)
+	if utf8.RuneCountInString(head) != modelReplyBudget {
+		t.Fatalf("one-line head must hard-cut at budget, got %d runes", utf8.RuneCountInString(head))
+	}
+	// Multiline overrun cuts at the last line break: only complete lines.
+	var sb strings.Builder
+	for i := 0; i < 400; i++ {
+		sb.WriteString(strings.Repeat("x", 18) + "\n")
+	}
+	big := sb.String() // 400 lines x 19 runes = 7600 runes
+	got = boundModelReply(big)
+	if !strings.Contains(got, truncationTrailer) {
+		t.Fatal("multiline overrun must carry the trailer")
+	}
+	head = strings.TrimSuffix(got, "\n\n"+truncationTrailer)
+	if utf8.RuneCountInString(head) > modelReplyBudget {
+		t.Fatalf("head exceeds budget: %d runes", utf8.RuneCountInString(head))
+	}
+	for _, ln := range strings.Split(head, "\n") {
+		if ln != strings.Repeat("x", 18) {
+			t.Fatalf("head must hold complete lines only, bad line %q", ln)
+		}
+	}
+	// Full path: 4000-rune answer posts within Discord's ceiling ending
+	// with trailer + sign-off.
+	var big4k strings.Builder
+	for i := 0; i < 200; i++ {
+		big4k.WriteString(strings.Repeat("y", 18) + "\n")
+	}
+	final := persona.Postprocess(boundModelReply(big4k.String()))
+	if utf8.RuneCountInString(final) > 2000 {
+		t.Fatalf("final reply exceeds Discord ceiling: %d runes", utf8.RuneCountInString(final))
+	}
+	if !strings.Contains(final, truncationTrailer) || !strings.HasSuffix(final, "Over.") {
+		t.Fatalf("final reply must end with trailer + sign-off: %q", final[len(final)-80:])
+	}
+	// 100-rune parity with the old cut-then-postprocess path.
+	short := strings.Repeat("z", 100)
+	if persona.Postprocess(boundModelReply(short)) != persona.Postprocess(cutRunes(short, 2000)) {
+		t.Fatal("short reply must stay byte-identical to the old path")
+	}
+	// Multibyte-safe: hard cut never splits a rune.
+	emoji := strings.Repeat("héllo—", 400) // 2400 runes, one line
+	got = boundModelReply(emoji)
+	head = strings.TrimSuffix(got, "\n\n"+truncationTrailer)
+	if utf8.RuneCountInString(head) != modelReplyBudget || !utf8.ValidString(got) {
+		t.Fatal("bound must cut by runes without splitting multibyte characters")
 	}
 }
 
