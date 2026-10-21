@@ -110,6 +110,15 @@ var reservedDocFields = map[string]bool{
 	"_id": true, "fetched_at": true, "text_blob": true, "embedding": true,
 }
 
+// setList writes a list field only when it has entries: a nil slice
+// encodes as BSON null, and an explicit null would sit beside arrays in
+// the same field across docs.
+func setList(seed bson.M, key string, items []string) {
+	if len(items) > 0 {
+		seed[key] = items
+	}
+}
+
 // seedDoc builds the Mongo body for one free-form seed: the field bag
 // minus the reserved fields, then the identity and provenance the ingest
 // owns. A seed must never set what Mongo or the wiki watcher owns.
@@ -122,12 +131,7 @@ func seedDoc(ds docSeed, source string) bson.M {
 		seed[k] = v
 	}
 	seed["name"] = ds.Name
-	// Only set aliases when there are any: a nil slice encodes as BSON
-	// null, and an explicit null would sit beside arrays in the same
-	// field across docs.
-	if len(ds.Aliases) > 0 {
-		seed["aliases"] = ds.Aliases
-	}
+	setList(seed, "aliases", ds.Aliases)
 	seed["source"] = source
 	seed["source_url"] = ""
 	seed["rev_id"] = 0
@@ -268,7 +272,10 @@ func run(mongoURI, dataDir string) error {
 		mongoURI = "mongodb://localhost:27017/rouge"
 	}
 	files, err := filepath.Glob(filepath.Join(dataDir, "*.json"))
-	if err != nil || len(files) == 0 {
+	if err != nil {
+		return fmt.Errorf("glob %s: %w", dataDir, err)
+	}
+	if len(files) == 0 {
 		return fmt.Errorf("no seed files in %s", dataDir)
 	}
 	client, err := mongo.Connect(options.Client().ApplyURI(mongoURI))
@@ -373,8 +380,7 @@ func run(mongoURI, dataDir string) error {
 				continue
 			}
 			seed := bson.M{
-				"faction": faction, "name": u.Name, "aliases": u.Aliases,
-				"role": u.Role, "weak_points": u.WeakPoints, "counters": u.Counters,
+				"faction": faction, "name": u.Name, "role": u.Role,
 				"source":        "data/" + filepath.Base(f),
 				"source_url":    "",
 				"rev_id":        0,
@@ -385,6 +391,9 @@ func run(mongoURI, dataDir string) error {
 				// timestamp. An explicit null would sit beside strings in
 				// the same field across docs.
 			}
+			setList(seed, "aliases", u.Aliases)
+			setList(seed, "weak_points", u.WeakPoints)
+			setList(seed, "counters", u.Counters)
 			unitOps = append(unitOps, mongo.NewUpdateOneModel().
 				SetFilter(bson.M{"faction": faction, "name": u.Name}).
 				SetUpdate(bson.M{"$setOnInsert": seed}).
@@ -396,7 +405,7 @@ func run(mongoURI, dataDir string) error {
 				continue
 			}
 			seed := bson.M{
-				"faction": faction, "name": s.Name, "counters": s.Counters,
+				"faction": faction, "name": s.Name,
 				"note": s.Note, "role": s.Note,
 				"source":        "data/" + filepath.Base(f),
 				"source_url":    "",
@@ -404,6 +413,7 @@ func run(mongoURI, dataDir string) error {
 				"patch_version": "",
 				// No text_blob: see the units seed above.
 			}
+			setList(seed, "counters", s.Counters)
 			structOps = append(structOps, mongo.NewUpdateOneModel().
 				SetFilter(bson.M{"faction": faction, "name": s.Name}).
 				SetUpdate(bson.M{"$setOnInsert": seed}).
@@ -448,33 +458,40 @@ func run(mongoURI, dataDir string) error {
 	// shelf. Seed names are unique per collection (the seed-file test
 	// enforces it), so two upserts can never race for the same doc.
 	bulkOpts := options.BulkWrite().SetOrdered(false)
-	if len(unitOps) > 0 {
-		res, err := db.Collection("units").BulkWrite(wctx, unitOps, bulkOpts)
+	// bulkSeed runs one shelf's upserts. Unordered writes mean some docs
+	// can land before an error, so a failure logs the partial counts
+	// instead of dropping them.
+	bulkSeed := func(coll string, ops []mongo.WriteModel) error {
+		res, err := db.Collection(coll).BulkWrite(wctx, ops, bulkOpts)
 		if err != nil {
-			return fmt.Errorf("seed units: %w", err)
+			if res != nil {
+				log.Printf("ingest: %s partial upserted=%d matched=%d: %v",
+					coll, res.UpsertedCount, res.MatchedCount, err)
+			}
+			return fmt.Errorf("seed %s: %w", coll, err)
 		}
 		upserted += res.UpsertedCount
 		matched += res.MatchedCount
+		return nil
+	}
+	if len(unitOps) > 0 {
+		if err := bulkSeed("units", unitOps); err != nil {
+			return err
+		}
 	}
 	if len(structOps) > 0 {
-		res, err := db.Collection("structures").BulkWrite(wctx, structOps, bulkOpts)
-		if err != nil {
-			return fmt.Errorf("seed structures: %w", err)
+		if err := bulkSeed("structures", structOps); err != nil {
+			return err
 		}
-		upserted += res.UpsertedCount
-		matched += res.MatchedCount
 	}
 	for _, coll := range docCollections {
 		ops := docOps[coll]
 		if len(ops) == 0 {
 			continue
 		}
-		res, err := db.Collection(coll).BulkWrite(wctx, ops, bulkOpts)
-		if err != nil {
-			return fmt.Errorf("seed %s: %w", coll, err)
+		if err := bulkSeed(coll, ops); err != nil {
+			return err
 		}
-		upserted += res.UpsertedCount
-		matched += res.MatchedCount
 	}
 	fmt.Printf("ingest: upserted=%d matched=%d\n", upserted, matched)
 	return nil
