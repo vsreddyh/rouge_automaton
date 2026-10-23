@@ -18,6 +18,9 @@ func TestPostprocess(t *testing.T) {
 	if got := Postprocess("serial: #7"); strings.Contains(got, "7") {
 		t.Fatalf("colon serial leaked: %q", got)
 	}
+	if got := Postprocess("serial 12345"); !strings.Contains(got, "Serial Number `[REDACTED]`") {
+		t.Fatalf("serial must redact to the canonical phrase: %q", got)
+	}
 	if got := Postprocess("Done. Over."); got != "Done. Over." {
 		t.Fatalf("stable reply rewritten: %q", got)
 	}
