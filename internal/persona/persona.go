@@ -238,7 +238,7 @@ func Postprocess(reply string) string {
 	if strings.TrimSpace(reply) == "" {
 		return "Over."
 	}
-	reply = serialRe.ReplaceAllString(strings.TrimSpace(reply), "serial [REDACTED]")
+	reply = serialRe.ReplaceAllString(strings.TrimSpace(reply), "Serial Number `[REDACTED]`")
 	if !overRe.MatchString(reply) {
 		// Append the sign-off without mangling terminal punctuation we did
 		// not write: strip only trailing spaces, then a trailing run of
