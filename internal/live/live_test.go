@@ -391,9 +391,9 @@ func moEntry(brief string, progress, target, expiresIn float64, planetIdx int) m
 		prog = append(prog, 0)
 	}
 	return map[string]any{
-		"progress":   prog,
-		"expiresIn":  expiresIn,
-		"setting":    map[string]any{
+		"progress":  prog,
+		"expiresIn": expiresIn,
+		"setting":   map[string]any{
 			"overrideTitle": "MAJOR ORDER",
 			"overrideBrief": brief,
 			"tasks":         tasks,
@@ -412,9 +412,9 @@ func stEntry(brief string, expiresIn float64, planetIdxs ...int) map[string]any 
 		prog = append(prog, 0)
 	}
 	return map[string]any{
-		"progress":   prog,
-		"expiresIn":  expiresIn,
-		"setting":    map[string]any{
+		"progress":  prog,
+		"expiresIn": expiresIn,
+		"setting":   map[string]any{
 			"overrideTitle": "STRATEGIC THREAT",
 			"overrideBrief": brief,
 			"tasks":         tasks,
@@ -512,9 +512,9 @@ func TestMajorOrderStrategicThreat(t *testing.T) {
 // skipped rather than headlined as a second Major Order.
 func TestMajorOrderCompanionCap(t *testing.T) {
 	blank := map[string]any{
-		"progress":   []any{0},
-		"expiresIn":  100,
-		"setting":    map[string]any{
+		"progress":  []any{0},
+		"expiresIn": 100,
+		"setting":   map[string]any{
 			"overrideTitle": "",
 			"overrideBrief": "Blank headline.",
 			"tasks":         []any{},
