@@ -587,30 +587,46 @@ func (c *Client) MajorOrder(ctx context.Context) string {
 	if len(snap.plans) == 0 {
 		return ""
 	}
-	entry := findMajorOrder(snap.mo)
-	if entry == nil {
+	entryIdx := findMajorOrderIdx(snap.mo)
+	if entryIdx < 0 {
 		return "No standing Major Order on the wire right now. Over."
 	}
-	return formatMajorOrder(entry, snap.names, time.Now())
+	now := time.Now()
+	line := formatAssignment(snap.mo[entryIdx], snap.names, now)
+	// Companion assignments (STRATEGIC THREAT tasks) ride along: they are
+	// part of the same feed and the same question family, so a
+	// "strategic threat" question resolves instead of falling through to
+	// war_status. Entries without a human brief carry nothing quotable.
+	for i, a := range snap.mo {
+		if i == entryIdx {
+			continue
+		}
+		setting, _ := a["setting"].(map[string]any)
+		if strings.TrimSpace(str(setting, "overrideBrief")) == "" {
+			continue
+		}
+		line += " " + formatAssignment(a, snap.names, now)
+	}
+	return line + " Over."
 }
 
-// findMajorOrder picks the standing order: the entry titled MAJOR ORDER
-// first, otherwise the first entry with a human brief (defensive — the
-// feed has carried exactly one MAJOR ORDER alongside strategic threats,
-// but the title is the contract, not the position).
-func findMajorOrder(mo []map[string]any) map[string]any {
-	for _, a := range mo {
+// findMajorOrderIdx picks the standing order's position: the entry titled
+// MAJOR ORDER first, otherwise the first entry with a human brief
+// (defensive — the feed has carried exactly one MAJOR ORDER alongside
+// strategic threats, but the title is the contract, not the position).
+func findMajorOrderIdx(mo []map[string]any) int {
+	for i, a := range mo {
 		setting, _ := a["setting"].(map[string]any)
 		if strings.EqualFold(strings.TrimSpace(str(setting, "overrideTitle")), "major order") {
-			return a
+			return i
 		}
 	}
-	for _, a := range mo {
+	for i, a := range mo {
 		if setting, ok := a["setting"].(map[string]any); ok && strings.TrimSpace(str(setting, "overrideBrief")) != "" {
-			return a
+			return i
 		}
 	}
-	return nil
+	return -1
 }
 
 // fvalAt reads a positional number from a task values/progress list: the
@@ -664,12 +680,12 @@ func firstReward(setting map[string]any) string {
 	return ""
 }
 
-// formatMajorOrder renders one assignment: title + brief, planet
+// formatAssignment renders one assignment: title + brief, planet
 // objectives resolved against the name table, kill progress paired by
 // task position (progress[i] counts toward tasks[i]; the type-3 kill
-// target rides values[2]), expiry, and reward. Every return ends with
-// "Over." so the model can quote it verbatim.
-func formatMajorOrder(a map[string]any, names map[string]string, now time.Time) string {
+// target rides values[2]), expiry, and reward. No sign-off: the caller
+// terminates the joined line once, so companions never double it.
+func formatAssignment(a map[string]any, names map[string]string, now time.Time) string {
 	setting, _ := a["setting"].(map[string]any)
 	title := strings.TrimSpace(str(setting, "overrideTitle"))
 	if title == "" {
@@ -726,5 +742,5 @@ func formatMajorOrder(a map[string]any, names map[string]string, now time.Time) 
 	if rw := firstReward(setting); rw != "" {
 		line += " " + rw + "."
 	}
-	return line + " Over."
+	return line
 }

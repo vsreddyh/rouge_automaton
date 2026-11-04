@@ -31,8 +31,8 @@ When the name is unknown, list candidates first (list_units, list_gear),
 then fetch the exact doc. War status ("war status", "how goes the war",
 "what's the front") is one war_status call with no arguments, answered
 directly — never stall on an ack. Major Order ("major order", "orders",
-"dispatch") is one major_order call with no arguments, answered directly —
-never from memory or the wiki.
+"dispatch", "strategic threat") is one major_order call with no arguments,
+answered directly — never from memory or the wiki.
 Never narrate intent ("Checking...", "Looking it up...", "Pulling..."): if you
 need data, your whole response is exactly one function call, never an
 acknowledgement. Either emit the function call or the final answer — an ack
@@ -126,7 +126,7 @@ func ToolDefs() []gorelay.ToolDef {
 				"name": strProp("exact planet name, e.g. Mintoria"),
 			}, "name")},
 		{Name: "major_order",
-			Description: "Live Major Order: standing High Command objective with kill/objective progress, expiry and reward. Takes no arguments — use for any Major Order question instead of answering from memory or the wiki.",
+			Description: "Live Major Order: standing High Command objective with kill/objective progress, expiry and reward, plus companion strategic-threat tasks. Takes no arguments — use for any Major Order or strategic-threat question instead of answering from memory or the wiki.",
 			Parameters:  obj(map[string]any{})},
 		{Name: "wiki_search",
 			Description: "Fall back to the Helldivers wiki when the database tools return nothing. Returns a summary with source link.",

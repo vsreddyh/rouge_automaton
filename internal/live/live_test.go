@@ -378,10 +378,10 @@ func TestPlanetsArrayShape(t *testing.T) {
 	}
 }
 
-// moFixture is one MAJOR ORDER assignment in the feed's shape: a kill
+// moEntry is one MAJOR ORDER assignment in the feed's shape: a kill
 // task (type 3, mandated number in values[2]) paired with progress[0],
 // plus an optional planet objective (type 13, planet index in values[2]).
-func moFixture(t *testing.T, brief string, progress, target, expiresIn float64, planetIdx int) string {
+func moEntry(brief string, progress, target, expiresIn float64, planetIdx int) map[string]any {
 	tasks := []map[string]any{
 		{"type": 3, "values": []any{2, 0, target}, "valueTypes": []any{1, 2, 3}},
 	}
@@ -390,16 +390,41 @@ func moFixture(t *testing.T, brief string, progress, target, expiresIn float64, 
 		tasks = append(tasks, map[string]any{"type": 13, "values": []any{1, 1, planetIdx}, "valueTypes": []any{3, 11, 12}})
 		prog = append(prog, 0)
 	}
-	raw, err := json.Marshal([]map[string]any{{
+	return map[string]any{
 		"progress":   prog,
-		"expiresIn": expiresIn,
+		"expiresIn":  expiresIn,
 		"setting":    map[string]any{
 			"overrideTitle": "MAJOR ORDER",
 			"overrideBrief": brief,
 			"tasks":         tasks,
 			"rewards":       []any{map[string]any{"type": 1, "amount": 45}},
 		},
-	}})
+	}
+}
+
+// stEntry is one STRATEGIC THREAT assignment: planet-hold objectives
+// (type 13, planet index in values[2]) with no reward.
+func stEntry(brief string, expiresIn float64, planetIdxs ...int) map[string]any {
+	tasks := make([]map[string]any, 0, len(planetIdxs))
+	prog := make([]any, 0, len(planetIdxs))
+	for _, idx := range planetIdxs {
+		tasks = append(tasks, map[string]any{"type": 13, "values": []any{1, 1, idx}, "valueTypes": []any{3, 11, 12}})
+		prog = append(prog, 0)
+	}
+	return map[string]any{
+		"progress":   prog,
+		"expiresIn":  expiresIn,
+		"setting":    map[string]any{
+			"overrideTitle": "STRATEGIC THREAT",
+			"overrideBrief": brief,
+			"tasks":         tasks,
+			"rewards":       []any{},
+		},
+	}
+}
+
+func moFixture(t *testing.T, brief string, progress, target, expiresIn float64, planetIdx int) string {
+	raw, err := json.Marshal([]any{moEntry(brief, progress, target, expiresIn, planetIdx)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -448,6 +473,37 @@ func TestMajorOrderPlanets(t *testing.T) {
 	c := newTestClient(srv)
 	if got := c.MajorOrder(context.Background()); !strings.Contains(got, "Objectives: FURY.") {
 		t.Fatalf("planet objective must resolve, got %q", got)
+	}
+}
+
+// TestMajorOrderStrategicThreat pins the companion entries: a
+// "strategic threat" question resolves against the STRATEGIC THREAT
+// assignment in the same feed read instead of falling through to
+// war_status.
+func TestMajorOrderStrategicThreat(t *testing.T) {
+	raw, err := json.Marshal([]any{
+		moEntry("Eliminate the mandated number of Terminids.", 488301075, 700000000, 335890, 0),
+		stEntry("Hold the designated planets.", 335656, 270, 78),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := servePlanetsMO(t,
+		[]fixturePlanet{
+			{index: 270, name: "KRAK", owner: 1, health: 1000000, max: 1000000, players: 5},
+			{index: 78, name: "VEX", owner: 1, health: 1000000, max: 1000000, players: 3},
+		},
+		minRoster+20, string(raw))
+	c := newTestClient(srv)
+	got := c.MajorOrder(context.Background())
+	for _, want := range []string{
+		"MAJOR ORDER: Eliminate the mandated number of Terminids.",
+		"STRATEGIC THREAT: Hold the designated planets. Objectives: KRAK, VEX.",
+		"Over.",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("want %q in %q", want, got)
+		}
 	}
 }
 
