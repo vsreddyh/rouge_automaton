@@ -432,10 +432,13 @@ func moFixture(t *testing.T, brief string, progress, target, expiresIn float64, 
 }
 
 // serveRosterMO serves a filler roster (live, one active diver) with the
-// given assignments body, so Major Order tests read live orders.
+// given assignments body, so Major Order tests read live orders. The
+// diver matters: an all-zero roster is the staleness guard, not a war.
 func serveRosterMO(t *testing.T, mo string) *httptest.Server {
 	t.Helper()
-	return servePlanetsMO(t, nil, minRoster+20, mo)
+	return servePlanetsMO(t, []fixturePlanet{
+		{index: 9, name: "Turing", owner: 1, health: 1000000, max: 1000000, players: 5},
+	}, minRoster+20, mo)
 }
 
 // TestMajorOrderKill covers the issue-76 question: the standing objective
