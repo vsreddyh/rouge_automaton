@@ -593,10 +593,11 @@ func (c *Client) MajorOrder(ctx context.Context) string {
 	}
 	now := time.Now()
 	line := formatAssignment(snap.mo[entryIdx], snap.names, now)
-	// Companion assignments (STRATEGIC THREAT tasks) ride along: they are
-	// part of the same feed and the same question family, so a
-	// "strategic threat" question resolves instead of falling through to
-	// war_status. Entries without a human brief carry nothing quotable.
+	// Companion assignments (STRATEGIC THREAT tasks) ride along, capped
+	// at three so a growing feed can never blow the Discord cut. Entries
+	// without a human brief carry nothing quotable; title-less ones are
+	// skipped rather than headlined as a second Major Order.
+	companions := 0
 	for i, a := range snap.mo {
 		if i == entryIdx {
 			continue
@@ -605,6 +606,13 @@ func (c *Client) MajorOrder(ctx context.Context) string {
 		if strings.TrimSpace(str(setting, "overrideBrief")) == "" {
 			continue
 		}
+		if strings.TrimSpace(str(setting, "overrideTitle")) == "" {
+			continue
+		}
+		if companions >= 3 {
+			break
+		}
+		companions++
 		line += " " + formatAssignment(a, snap.names, now)
 	}
 	return line + " Over."
@@ -653,6 +661,16 @@ func fvalAt(list []any, i int) float64 {
 		return float64(v)
 	case json.Number:
 		if f, err := v.Float64(); err == nil {
+			if math.IsNaN(f) || math.IsInf(f, 0) {
+				return 0
+			}
+			return f
+		}
+	case string:
+		if f, err := strconv.ParseFloat(strings.TrimSpace(v), 64); err == nil {
+			if math.IsNaN(f) || math.IsInf(f, 0) {
+				return 0
+			}
 			return f
 		}
 	}

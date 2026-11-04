@@ -507,6 +507,50 @@ func TestMajorOrderStrategicThreat(t *testing.T) {
 	}
 }
 
+// TestMajorOrderCompanionCap pins the review bound: at most three
+// companions ride along (the Discord cut), and a title-less companion is
+// skipped rather than headlined as a second Major Order.
+func TestMajorOrderCompanionCap(t *testing.T) {
+	blank := map[string]any{
+		"progress":   []any{0},
+		"expiresIn":  100,
+		"setting":    map[string]any{
+			"overrideTitle": "",
+			"overrideBrief": "Blank headline.",
+			"tasks":         []any{},
+			"rewards":       []any{},
+		},
+	}
+	raw, err := json.Marshal([]any{
+		moEntry("Eliminate the mandated number of Terminids.", 1, 2, 100, 0),
+		stEntry("Hold A.", 100, 270),
+		blank,
+		stEntry("Hold B.", 100, 78),
+		stEntry("Hold C.", 100),
+		stEntry("Hold D.", 100),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := servePlanetsMO(t,
+		[]fixturePlanet{
+			{index: 270, name: "KRAK", owner: 1, health: 1000000, max: 1000000, players: 5},
+			{index: 78, name: "VEX", owner: 1, health: 1000000, max: 1000000, players: 3},
+		},
+		minRoster+20, string(raw))
+	c := newTestClient(srv)
+	got := c.MajorOrder(context.Background())
+	if n := strings.Count(got, "STRATEGIC THREAT:"); n != 3 {
+		t.Fatalf("want 3 companions, got %d in %q", n, got)
+	}
+	if strings.Contains(got, "Blank headline") {
+		t.Fatalf("title-less companion must be skipped, got %q", got)
+	}
+	if strings.Count(got, "Over.") != 1 {
+		t.Fatalf("joined line must sign off once, got %q", got)
+	}
+}
+
 // TestMajorOrderEmpty pins the live-but-quiet feed: valid assignments
 // with no entries say so explicitly instead of reading as down.
 func TestMajorOrderEmpty(t *testing.T) {
