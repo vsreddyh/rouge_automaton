@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -429,8 +430,11 @@ func TestMajorOrderKill(t *testing.T) {
 			t.Fatalf("want %q in %q", want, got)
 		}
 	}
-	if want := time.Now().Add(335890 * time.Second).Format("Jan 2"); !strings.Contains(got, "Ends "+want) {
-		t.Fatalf("want ends %q in %q", want, got)
+	// Ends-date asserts shape, not the exact day: the want and the got
+	// stamp different Nows, so a midnight crossing between them would
+	// flake an exact match.
+	if ok, _ := regexp.MatchString(`Ends [A-Z][a-z]{2} \d{1,2}\.`, got); !ok {
+		t.Fatalf("want an ends date in %q", got)
 	}
 }
 

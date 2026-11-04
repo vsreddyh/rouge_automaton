@@ -58,27 +58,33 @@ var sharedHTTP = &http.Client{Timeout: 20 * time.Second}
 // refresh serves the cache (or nothing) and backs off 30 seconds so an
 // outage does not refire all five endpoints on every call.
 func (c *Client) planets(ctx context.Context) []map[string]any {
+	return c.snapshot(ctx).plans
+}
+
+// snapshot returns the cached feed read, refreshing it past the 5-minute
+// TTL. One call, one epoch: liveness and assignments always come from the
+// same read, so concurrent refreshes can never mix them.
+func (c *Client) snapshot(ctx context.Context) snapshot {
 	c.mu.RLock()
-	cached, at, retry := c.plans, c.at, c.retry
+	plans, mo, names, at, retry := c.plans, c.mo, c.names, c.at, c.retry
 	c.mu.RUnlock()
-	if time.Since(at) < 5*time.Minute && cached != nil {
-		return cached
-	}
-	if time.Now().Before(retry) {
-		return cached
-	}
-	if fresh := c.refresh(ctx); fresh != nil {
+	if time.Since(at) >= 5*time.Minute || plans == nil {
+		if time.Now().Before(retry) {
+			return snapshot{plans: plans, mo: mo, names: names}
+		}
+		if fresh := c.refresh(ctx); fresh != nil {
+			c.mu.Lock()
+			c.plans, c.mo, c.names, c.at, c.retry = fresh.plans, fresh.mo, fresh.names, time.Now(), time.Time{}
+			c.mu.Unlock()
+			return *fresh
+		}
 		c.mu.Lock()
-		c.plans, c.mo, c.names, c.at, c.retry = fresh.plans, fresh.mo, fresh.names, time.Now(), time.Time{}
+		if ctx.Err() == nil {
+			c.retry = time.Now().Add(30 * time.Second)
+		}
 		c.mu.Unlock()
-		return fresh.plans
 	}
-	c.mu.Lock()
-	if ctx.Err() == nil {
-		c.retry = time.Now().Add(30 * time.Second)
-	}
-	c.mu.Unlock()
-	return cached
+	return snapshot{plans: plans, mo: mo, names: names}
 }
 
 // snapshot is one coherent feed read: the planet roster, the standing
@@ -577,18 +583,15 @@ func (c *Client) WarStatus(ctx context.Context) string {
 // caller reports a dead uplink instead of inventing an objective. A live
 // feed with no assignments says so explicitly — never an uplink-down.
 func (c *Client) MajorOrder(ctx context.Context) string {
-	plans := c.planets(ctx)
-	if len(plans) == 0 {
+	snap := c.snapshot(ctx)
+	if len(snap.plans) == 0 {
 		return ""
 	}
-	c.mu.RLock()
-	mo, names := c.mo, c.names
-	c.mu.RUnlock()
-	entry := findMajorOrder(mo)
+	entry := findMajorOrder(snap.mo)
 	if entry == nil {
 		return "No standing Major Order on the wire right now. Over."
 	}
-	return formatMajorOrder(entry, names, time.Now())
+	return formatMajorOrder(entry, snap.names, time.Now())
 }
 
 // findMajorOrder picks the standing order: the entry titled MAJOR ORDER
@@ -623,6 +626,11 @@ func fvalAt(list []any, i int) float64 {
 			return 0
 		}
 		return v
+	case float32:
+		if math.IsNaN(float64(v)) || math.IsInf(float64(v), 0) {
+			return 0
+		}
+		return float64(v)
 	case int:
 		return float64(v)
 	case int64:
@@ -713,7 +721,7 @@ func formatMajorOrder(a map[string]any, names map[string]string, now time.Time) 
 		line += " " + p + "."
 	}
 	if exp := num(a, "expiresIn"); exp > 0 {
-		line += " Ends " + now.Add(time.Duration(exp)*time.Second).Format("Jan 2") + "."
+		line += " Ends " + now.Add(time.Duration(exp*float64(time.Second))).Format("Jan 2") + "."
 	}
 	if rw := firstReward(setting); rw != "" {
 		line += " " + rw + "."
