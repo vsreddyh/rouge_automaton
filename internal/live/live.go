@@ -351,34 +351,38 @@ func (c *Client) Up(ctx context.Context) bool {
 }
 
 func num(m map[string]any, key string) float64 {
-	// encoding/json decodes numbers into float64, but a type switch keeps
-	// DEFENSE classification and counts correct if the API ever emits an
-	// int shape (or tests construct one): without it eventType == 1 reads
-	// 0 and every defense misclassifies as campaign.
-	switch v := m[key].(type) {
+	return toFloat(m[key])
+}
+
+// toFloat coerces one decoded JSON scalar to a float, tolerating the
+// int/float/string shapes a mirror or a test may ship (encoding/json gives
+// float64 in production). NaN, Inf, and unparseable input read as 0 so a
+// malformed field can never poison arithmetic.
+func toFloat(v any) float64 {
+	switch n := v.(type) {
 	case float64:
-		if math.IsNaN(v) || math.IsInf(v, 0) {
+		if math.IsNaN(n) || math.IsInf(n, 0) {
 			return 0
 		}
-		return v
+		return n
 	case float32:
-		if math.IsNaN(float64(v)) || math.IsInf(float64(v), 0) {
+		if math.IsNaN(float64(n)) || math.IsInf(float64(n), 0) {
 			return 0
 		}
-		return float64(v)
+		return float64(n)
 	case int:
-		return float64(v)
+		return float64(n)
 	case int64:
-		return float64(v)
+		return float64(n)
 	case json.Number:
-		if f, err := v.Float64(); err == nil {
+		if f, err := n.Float64(); err == nil {
 			if math.IsNaN(f) || math.IsInf(f, 0) {
 				return 0
 			}
 			return f
 		}
 	case string:
-		if f, err := strconv.ParseFloat(strings.TrimSpace(v), 64); err == nil {
+		if f, err := strconv.ParseFloat(strings.TrimSpace(n), 64); err == nil {
 			if math.IsNaN(f) || math.IsInf(f, 0) {
 				return 0
 			}
@@ -579,27 +583,31 @@ func (c *Client) WarStatus(ctx context.Context) string {
 
 // MajorOrder answers "what is the Major Order" with the standing High
 // Command objective: brief, kill/objective progress, expiry and reward.
-// Empty means the feed gave us nothing at all (outage, no cache), so the
-// caller reports a dead uplink instead of inventing an objective. A live
-// feed with no assignments says so explicitly — never an uplink-down.
+// Companions (STRATEGIC THREAT tasks) ride along, so a "strategic threat"
+// question resolves too. Empty means the feed gave us nothing at all
+// (outage, no cache), so the caller reports a dead uplink instead of
+// inventing an objective. A live feed with no assignments says so
+// explicitly — never an uplink-down.
 func (c *Client) MajorOrder(ctx context.Context) string {
 	snap := c.snapshot(ctx)
 	if len(snap.plans) == 0 {
 		return ""
 	}
-	entryIdx := findMajorOrderIdx(snap.mo)
-	if entryIdx < 0 {
-		return "No standing Major Order on the wire right now. Over."
-	}
 	now := time.Now()
-	line := formatAssignment(snap.mo[entryIdx], snap.names, now)
-	// Companion assignments (STRATEGIC THREAT tasks) ride along, capped
-	// at three so a growing feed can never blow the Discord cut. Entries
-	// without a human brief carry nothing quotable; title-less ones are
-	// skipped rather than headlined as a second Major Order.
+	// The MAJOR ORDER title is the contract: a threats-only feed says no
+	// order is standing and reports the threats, rather than headlining a
+	// STRATEGIC THREAT as the Major Order.
+	idx := findMajorOrderIdx(snap.mo)
+	line := ""
+	if idx >= 0 {
+		line = formatAssignment(snap.mo[idx], snap.names, now)
+	}
+	// Companions are capped at three so a growing feed can never blow the
+	// Discord cut. Entries without a human brief carry nothing quotable;
+	// title-less ones are skipped rather than given a default headline.
 	companions := 0
 	for i, a := range snap.mo {
-		if i == entryIdx {
+		if i == idx {
 			continue
 		}
 		setting, _ := a["setting"].(map[string]any)
@@ -613,15 +621,25 @@ func (c *Client) MajorOrder(ctx context.Context) string {
 			break
 		}
 		companions++
+		if line == "" {
+			line = formatAssignment(a, snap.names, now)
+			continue
+		}
 		line += " " + formatAssignment(a, snap.names, now)
+	}
+	if line == "" {
+		return "No standing Major Order on the wire right now. Over."
+	}
+	if idx < 0 {
+		line = "No standing Major Order. " + line
 	}
 	return line + " Over."
 }
 
-// findMajorOrderIdx picks the standing order's position: the entry titled
-// MAJOR ORDER first, otherwise the first entry with a human brief
-// (defensive — the feed has carried exactly one MAJOR ORDER alongside
-// strategic threats, but the title is the contract, not the position).
+// findMajorOrderIdx returns the position of the entry titled MAJOR ORDER,
+// or -1. Title-only on purpose: the feed carries strategic threats beside
+// the order, and promoting the first brief-carrying entry would answer a
+// Major Order question with a threat headline.
 func findMajorOrderIdx(mo []map[string]any) int {
 	for i, a := range mo {
 		setting, _ := a["setting"].(map[string]any)
@@ -629,52 +647,18 @@ func findMajorOrderIdx(mo []map[string]any) int {
 			return i
 		}
 	}
-	for i, a := range mo {
-		if setting, ok := a["setting"].(map[string]any); ok && strings.TrimSpace(str(setting, "overrideBrief")) != "" {
-			return i
-		}
-	}
 	return -1
 }
 
-// fvalAt reads a positional number from a task values/progress list: the
-// feed ships floats, but ints ride the same JSON through tests and
-// mirrors, so both shapes (and short lists) read safely.
+// fvalAt reads a positional number from a task values/progress list:
+// the feed ships floats, but ints and numeric strings ride the same JSON
+// through mirrors and tests, so toFloat handles every shape. Short lists
+// read 0 instead of panicking.
 func fvalAt(list []any, i int) float64 {
 	if i < 0 || i >= len(list) {
 		return 0
 	}
-	switch v := list[i].(type) {
-	case float64:
-		if math.IsNaN(v) || math.IsInf(v, 0) {
-			return 0
-		}
-		return v
-	case float32:
-		if math.IsNaN(float64(v)) || math.IsInf(float64(v), 0) {
-			return 0
-		}
-		return float64(v)
-	case int:
-		return float64(v)
-	case int64:
-		return float64(v)
-	case json.Number:
-		if f, err := v.Float64(); err == nil {
-			if math.IsNaN(f) || math.IsInf(f, 0) {
-				return 0
-			}
-			return f
-		}
-	case string:
-		if f, err := strconv.ParseFloat(strings.TrimSpace(v), 64); err == nil {
-			if math.IsNaN(f) || math.IsInf(f, 0) {
-				return 0
-			}
-			return f
-		}
-	}
-	return 0
+	return toFloat(list[i])
 }
 
 // firstReward names the headline reward: type 1 is medals (the only reward

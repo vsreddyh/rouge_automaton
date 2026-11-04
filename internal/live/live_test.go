@@ -510,6 +510,30 @@ func TestMajorOrderStrategicThreat(t *testing.T) {
 	}
 }
 
+// TestMajorOrderThreatsOnly pins the title contract: with no MAJOR ORDER
+// entry, a threats-only feed says no order is standing and reports the
+// threat — it never headlines a STRATEGIC THREAT as the Major Order.
+func TestMajorOrderThreatsOnly(t *testing.T) {
+	raw, err := json.Marshal([]any{stEntry("Hold the designated planets.", 100, 270)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := servePlanetsMO(t,
+		[]fixturePlanet{{index: 270, name: "KRAK", owner: 1, health: 1000000, max: 1000000, players: 5}},
+		minRoster+20, string(raw))
+	c := newTestClient(srv)
+	got := c.MajorOrder(context.Background())
+	if !strings.HasPrefix(got, "No standing Major Order.") {
+		t.Fatalf("threats-only feed must deny a standing order, got %q", got)
+	}
+	if !strings.Contains(got, "STRATEGIC THREAT: Hold the designated planets. Objectives: KRAK.") {
+		t.Fatalf("threat must still be reported, got %q", got)
+	}
+	if !strings.HasSuffix(got, "Over.") {
+		t.Fatalf("must sign off, got %q", got)
+	}
+}
+
 // TestMajorOrderCompanionCap pins the review bound: at most three
 // companions ride along (the Discord cut), and a title-less companion is
 // skipped rather than headlined as a second Major Order.
