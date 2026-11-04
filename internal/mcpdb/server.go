@@ -50,7 +50,7 @@ func textResult(text string) (*mcp.CallToolResult, any, error) {
 	return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: text}}}, nil, nil
 }
 
-// NewServer registers the eight intel tools over backend and returns a
+// NewServer registers the nine intel tools over backend and returns a
 // server ready to Run on any transport (stdio in production).
 func NewServer(backend ToolBackend) *mcp.Server {
 	server := mcp.NewServer(&mcp.Implementation{Name: "rouge-mcpdb", Version: "1.0.0"}, nil)
@@ -78,6 +78,10 @@ func NewServer(backend ToolBackend) *mcp.Server {
 	mcp.AddTool(server, &mcp.Tool{Name: "planet_status", Description: "Live war status for one planet: owner, liberation percent, active divers."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, args nameArgs) (*mcp.CallToolResult, any, error) {
 			return textResult(backend.Execute(ctx, "planet_status", toJSON(args)))
+		})
+	mcp.AddTool(server, &mcp.Tool{Name: "major_order", Description: "Live Major Order: standing High Command objective with progress, expiry and reward. No arguments."},
+		func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, any, error) {
+			return textResult(backend.Execute(ctx, "major_order", "{}"))
 		})
 	mcp.AddTool(server, &mcp.Tool{Name: "wiki_search", Description: "Fall back to the Helldivers wiki when the database tools return nothing."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, args wikiArgs) (*mcp.CallToolResult, any, error) {

@@ -38,8 +38,8 @@ func TestServerToolsEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(tools.Tools) != 8 {
-		t.Fatalf("want 8 tools, got %d", len(tools.Tools))
+	if len(tools.Tools) != 9 {
+		t.Fatalf("want 9 tools, got %d", len(tools.Tools))
 	}
 
 	res, err := session.CallTool(t.Context(), &mcp.CallToolParams{
@@ -107,6 +107,30 @@ func TestServerToolsEndToEnd(t *testing.T) {
 		t.Fatalf("war_status content = %q", wtext)
 	}
 	if len(stub.calls) != 3 || stub.calls[2][0] != "war_status" {
+		t.Fatalf("backend calls = %v", stub.calls)
+	}
+	// major_order takes no arguments like war_status: the no-arg handler
+	// must round-trip and reach the backend.
+	mres, err := session.CallTool(t.Context(), &mcp.CallToolParams{
+		Name:      "major_order",
+		Arguments: map[string]any{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mres.IsError {
+		t.Fatal("major_order call flagged error")
+	}
+	mtext := ""
+	for _, c := range mres.Content {
+		if tc, ok := c.(*mcp.TextContent); ok {
+			mtext += tc.Text
+		}
+	}
+	if mtext != "canned:major_order" {
+		t.Fatalf("major_order content = %q", mtext)
+	}
+	if len(stub.calls) != 4 || stub.calls[3][0] != "major_order" {
 		t.Fatalf("backend calls = %v", stub.calls)
 	}
 }

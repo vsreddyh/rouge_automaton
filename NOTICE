@@ -24,7 +24,7 @@ and it carries its own licence (see DATA-LICENSE):
   same CC BY-NC-SA 4.0 terms.
 
 - The Helldivers Training Manual live war API, which serves the live
-  galactic war state (war_status / planet_status answers). Live data
+  galactic war state (war_status / planet_status / major_order answers). Live data
   is summarised at answer time, never stored.
 
 The non-commercial clause matters: this bot is free and
