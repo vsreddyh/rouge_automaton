@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -29,14 +30,14 @@ type fixturePlanet struct {
 	nameless     bool    // no name-table entry: unaddressable, must be skipped
 }
 
-// serveBodies serves the four Training Manual endpoints from canned bodies.
-func serveBodies(t *testing.T, campaign, status, info, names string, code int) *httptest.Server {
+// serveBodies serves the five Training Manual endpoints from canned bodies.
+func serveBodies(t *testing.T, campaign, status, info, names, mo string, code int) *httptest.Server {
 	t.Helper()
 	mux := http.NewServeMux()
 	for _, p := range htmPaths {
 		body := map[string]string{
 			"/war/campaign": campaign, "/war/status": status,
-			"/war/info": info, "/planets": names,
+			"/war/info": info, "/planets": names, "/war/major-orders": mo,
 		}[p]
 		b, c := body, code
 		mux.HandleFunc(p, func(w http.ResponseWriter, r *http.Request) {
@@ -65,6 +66,13 @@ func serveRoster(t *testing.T, planets []fixturePlanet) *httptest.Server {
 // servePlanets serves planets plus filler quiet planets until the roster
 // holds total entries.
 func servePlanets(t *testing.T, planets []fixturePlanet, total int) *httptest.Server {
+	t.Helper()
+	return servePlanetsMO(t, planets, total, "[]")
+}
+
+// servePlanetsMO is servePlanets with an explicit assignments body, so
+// Major Order tests read live orders against a valid roster.
+func servePlanetsMO(t *testing.T, planets []fixturePlanet, total int, mo string) *httptest.Server {
 	t.Helper()
 	seen := map[int]bool{}
 	for _, p := range planets {
@@ -119,7 +127,7 @@ func servePlanets(t *testing.T, planets []fixturePlanet, total int) *httptest.Se
 		marshal(campaign),
 		marshal(map[string]any{"planetStatus": status}),
 		marshal(map[string]any{"planetInfos": infos}),
-		marshal(names), 200)
+		marshal(names), mo, 200)
 }
 
 // newTestClient wires a Client at the canned server with the headers the
@@ -209,7 +217,7 @@ func TestWarStatusQuiet(t *testing.T) {
 }
 
 func TestWarStatusNoData(t *testing.T) {
-	srv := serveBodies(t, "", "", "", "", 500)
+	srv := serveBodies(t, "", "", "", "", "", 500)
 	c := newTestClient(srv)
 	if got := c.WarStatus(context.Background()); got != "" {
 		t.Fatalf("no data must return empty, got %q", got)
@@ -311,7 +319,7 @@ func TestCacheSurvivesOutage(t *testing.T) {
 }
 
 func TestNon200Empty(t *testing.T) {
-	srv := serveBodies(t, "", "", "", "", 429)
+	srv := serveBodies(t, "", "", "", "", "", 429)
 	c := newTestClient(srv)
 	if got := c.PlanetLine(context.Background(), "mintoria"); got != "" {
 		t.Fatalf("non-200 must not parse body: %q", got)
@@ -360,12 +368,275 @@ func TestPlanetsArrayShape(t *testing.T) {
 	srv := serveBodies(t, "[]",
 		marshal(map[string]any{"planetStatus": status}),
 		marshal(map[string]any{"planetInfos": infos}),
-		marshal(names), 200)
+		marshal(names), "[]", 200)
 	c := newTestClient(srv)
 	if !c.Up(context.Background()) {
 		t.Fatal("array name table must read as up")
 	}
 	if got := c.PlanetLine(context.Background(), "filler 7"); !strings.Contains(got, "Filler 7: Humans") {
 		t.Fatalf("array name table must resolve: %q", got)
+	}
+}
+
+// moEntry is one MAJOR ORDER assignment in the feed's shape: a kill
+// task (type 3, mandated number in values[2]) paired with progress[0],
+// plus an optional planet objective (type 13, planet index in values[2]).
+func moEntry(brief string, progress, target, expiresIn float64, planetIdx int) map[string]any {
+	tasks := []map[string]any{
+		{"type": 3, "values": []any{2, 0, target}, "valueTypes": []any{1, 2, 3}},
+	}
+	prog := []any{progress, 1}
+	if planetIdx > 0 {
+		tasks = append(tasks, map[string]any{"type": 13, "values": []any{1, 1, planetIdx}, "valueTypes": []any{3, 11, 12}})
+		prog = append(prog, 0)
+	}
+	return map[string]any{
+		"progress":  prog,
+		"expiresIn": expiresIn,
+		"setting": map[string]any{
+			"overrideTitle": "MAJOR ORDER",
+			"overrideBrief": brief,
+			"tasks":         tasks,
+			"rewards":       []any{map[string]any{"type": 1, "amount": 45}},
+		},
+	}
+}
+
+// stEntry is one STRATEGIC THREAT assignment: planet-hold objectives
+// (type 13, planet index in values[2]) with no reward.
+func stEntry(brief string, expiresIn float64, planetIdxs ...int) map[string]any {
+	tasks := make([]map[string]any, 0, len(planetIdxs))
+	prog := make([]any, 0, len(planetIdxs))
+	for _, idx := range planetIdxs {
+		tasks = append(tasks, map[string]any{"type": 13, "values": []any{1, 1, idx}, "valueTypes": []any{3, 11, 12}})
+		prog = append(prog, 0)
+	}
+	return map[string]any{
+		"progress":  prog,
+		"expiresIn": expiresIn,
+		"setting": map[string]any{
+			"overrideTitle": "STRATEGIC THREAT",
+			"overrideBrief": brief,
+			"tasks":         tasks,
+			"rewards":       []any{},
+		},
+	}
+}
+
+func moFixture(t *testing.T, brief string, progress, target, expiresIn float64, planetIdx int) string {
+	raw, err := json.Marshal([]any{moEntry(brief, progress, target, expiresIn, planetIdx)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(raw)
+}
+
+// serveRosterMO serves a filler roster (live, one active diver) with the
+// given assignments body, so Major Order tests read live orders. The
+// diver matters: an all-zero roster is the staleness guard, not a war.
+func serveRosterMO(t *testing.T, mo string) *httptest.Server {
+	t.Helper()
+	return servePlanetsMO(t, []fixturePlanet{
+		{index: 9, name: "Turing", owner: 1, health: 1000000, max: 1000000, players: 5},
+	}, minRoster+20, mo)
+}
+
+// TestMajorOrderKill covers the issue-76 question: the standing objective
+// with kill progress against the mandated number, expiry, and reward —
+// quoted verbatim with the sign-off.
+func TestMajorOrderKill(t *testing.T) {
+	srv := serveRosterMO(t, moFixture(t, "Eliminate the mandated number of Terminids.", 488301075, 700000000, 335890, 0))
+	c := newTestClient(srv)
+	got := c.MajorOrder(context.Background())
+	for _, want := range []string{
+		"MAJOR ORDER: Eliminate the mandated number of Terminids.",
+		"Progress 488301075 of 700000000 (69.8%)",
+		"Reward: 45 medals",
+		"Over.",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("want %q in %q", want, got)
+		}
+	}
+	// Ends-date asserts shape, not the exact day: the want and the got
+	// stamp different Nows, so a midnight crossing between them would
+	// flake an exact match.
+	if ok, _ := regexp.MatchString(`Ends [A-Z][a-z]{2} \d{1,2}\.`, got); !ok {
+		t.Fatalf("want an ends date in %q", got)
+	}
+}
+
+// TestMajorOrderPlanets pins planet-objective resolution: a type-13 task
+// names its planet from the shared index table.
+func TestMajorOrderPlanets(t *testing.T) {
+	srv := servePlanetsMO(t,
+		[]fixturePlanet{{index: 7, name: "FURY", owner: 1, health: 1000000, max: 1000000, players: 5}},
+		minRoster+20,
+		moFixture(t, "Hold the designated planets.", 1, 2, 335890, 7))
+	c := newTestClient(srv)
+	if got := c.MajorOrder(context.Background()); !strings.Contains(got, "Objectives: FURY.") {
+		t.Fatalf("planet objective must resolve, got %q", got)
+	}
+}
+
+// TestMajorOrderStrategicThreat pins the companion entries: a
+// "strategic threat" question resolves against the STRATEGIC THREAT
+// assignment in the same feed read instead of falling through to
+// war_status.
+func TestMajorOrderStrategicThreat(t *testing.T) {
+	raw, err := json.Marshal([]any{
+		moEntry("Eliminate the mandated number of Terminids.", 488301075, 700000000, 335890, 0),
+		stEntry("Hold the designated planets.", 335656, 270, 78),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := servePlanetsMO(t,
+		[]fixturePlanet{
+			{index: 270, name: "KRAK", owner: 1, health: 1000000, max: 1000000, players: 5},
+			{index: 78, name: "VEX", owner: 1, health: 1000000, max: 1000000, players: 3},
+		},
+		minRoster+20, string(raw))
+	c := newTestClient(srv)
+	got := c.MajorOrder(context.Background())
+	for _, want := range []string{
+		"MAJOR ORDER: Eliminate the mandated number of Terminids.",
+		"STRATEGIC THREAT: Hold the designated planets. Objectives: KRAK, VEX.",
+		"Over.",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("want %q in %q", want, got)
+		}
+	}
+}
+
+// TestMajorOrderThreatsOnly pins the title contract: with no MAJOR ORDER
+// entry, a threats-only feed says no order is standing and reports the
+// threat — it never headlines a STRATEGIC THREAT as the Major Order.
+func TestMajorOrderThreatsOnly(t *testing.T) {
+	raw, err := json.Marshal([]any{stEntry("Hold the designated planets.", 100, 270)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := servePlanetsMO(t,
+		[]fixturePlanet{{index: 270, name: "KRAK", owner: 1, health: 1000000, max: 1000000, players: 5}},
+		minRoster+20, string(raw))
+	c := newTestClient(srv)
+	got := c.MajorOrder(context.Background())
+	if !strings.HasPrefix(got, "No standing Major Order.") {
+		t.Fatalf("threats-only feed must deny a standing order, got %q", got)
+	}
+	if !strings.Contains(got, "STRATEGIC THREAT: Hold the designated planets. Objectives: KRAK.") {
+		t.Fatalf("threat must still be reported, got %q", got)
+	}
+	if !strings.HasSuffix(got, "Over.") {
+		t.Fatalf("must sign off, got %q", got)
+	}
+}
+
+// TestMajorOrderCompanionCap pins the review bound: at most three
+// companions ride along (the Discord cut), and a title-less companion is
+// skipped rather than headlined as a second Major Order.
+func TestMajorOrderCompanionCap(t *testing.T) {
+	blank := map[string]any{
+		"progress":  []any{0},
+		"expiresIn": 100,
+		"setting": map[string]any{
+			"overrideTitle": "",
+			"overrideBrief": "Blank headline.",
+			"tasks":         []any{},
+			"rewards":       []any{},
+		},
+	}
+	raw, err := json.Marshal([]any{
+		moEntry("Eliminate the mandated number of Terminids.", 1, 2, 100, 0),
+		stEntry("Hold A.", 100, 270),
+		blank,
+		stEntry("Hold B.", 100, 78),
+		stEntry("Hold C.", 100),
+		stEntry("Hold D.", 100),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := servePlanetsMO(t,
+		[]fixturePlanet{
+			{index: 270, name: "KRAK", owner: 1, health: 1000000, max: 1000000, players: 5},
+			{index: 78, name: "VEX", owner: 1, health: 1000000, max: 1000000, players: 3},
+		},
+		minRoster+20, string(raw))
+	c := newTestClient(srv)
+	got := c.MajorOrder(context.Background())
+	if n := strings.Count(got, "STRATEGIC THREAT:"); n != 3 {
+		t.Fatalf("want 3 companions, got %d in %q", n, got)
+	}
+	if strings.Contains(got, "Blank headline") {
+		t.Fatalf("title-less companion must be skipped, got %q", got)
+	}
+	if strings.Count(got, "Over.") != 1 {
+		t.Fatalf("joined line must sign off once, got %q", got)
+	}
+}
+
+// TestMajorOrderEmpty pins the live-but-quiet feed: valid assignments
+// with no entries say so explicitly instead of reading as down.
+func TestMajorOrderEmpty(t *testing.T) {
+	srv := serveRosterMO(t, "[]")
+	c := newTestClient(srv)
+	if got := c.MajorOrder(context.Background()); !strings.Contains(got, "No standing Major Order") {
+		t.Fatalf("empty assignments must say so, got %q", got)
+	}
+	if !strings.HasSuffix(c.MajorOrder(context.Background()), "Over.") {
+		t.Fatal("quiet order must still sign off")
+	}
+}
+
+// TestMajorOrderOutageCouples pins the one-lifecycle design: a dead
+// assignments endpoint sinks the whole refresh, so the order AND the
+// roster read down together instead of half-serving.
+func TestMajorOrderOutageCouples(t *testing.T) {
+	const n = minRoster + 20
+	status := make([]map[string]any, 0, n)
+	infos := make([]map[string]any, 0, n)
+	names := map[string]any{}
+	for i := 0; i < n; i++ {
+		players := 0.0
+		if i == 0 {
+			players = 5
+		}
+		status = append(status, map[string]any{"index": i, "owner": 1, "health": 1000000, "players": players})
+		infos = append(infos, map[string]any{"index": i, "maxHealth": 1000000})
+		names[fmt.Sprint(i)] = map[string]any{"name": fmt.Sprintf("Filler %d", i)}
+	}
+	marshal := func(v any) string {
+		raw, err := json.Marshal(v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(raw)
+	}
+	mux := http.NewServeMux()
+	for path, body := range map[string]string{
+		"/war/campaign": "[]",
+		"/war/status":   marshal(map[string]any{"planetStatus": status}),
+		"/war/info":     marshal(map[string]any{"planetInfos": infos}),
+		"/planets":      marshal(names),
+	} {
+		b := body
+		mux.HandleFunc(path, func(w http.ResponseWriter, r *http.Request) {
+			_, _ = w.Write([]byte(b))
+		})
+	}
+	mux.HandleFunc("/war/major-orders", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(500)
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	c := newTestClient(srv)
+	if got := c.MajorOrder(context.Background()); got != "" {
+		t.Fatalf("dead assignments must read down, got %q", got)
+	}
+	if got := c.WarStatus(context.Background()); got != "" {
+		t.Fatalf("dead assignments sink the roster too, got %q", got)
 	}
 }

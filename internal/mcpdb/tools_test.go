@@ -16,8 +16,8 @@ import (
 
 func TestToolDefs(t *testing.T) {
 	defs := ToolDefs()
-	if len(defs) != 8 {
-		t.Fatalf("want 8 tools, got %d", len(defs))
+	if len(defs) != 9 {
+		t.Fatalf("want 9 tools, got %d", len(defs))
 	}
 	seen := map[string]bool{}
 	for _, d := range defs {
@@ -75,6 +75,10 @@ func TestExecuteUnknownAndBadArgs(t *testing.T) {
 	// war_status must fail closed without a live client, never panic.
 	if got := e.Execute(t.Context(), "war_status", `{}`); !strings.Contains(got, "not wired") {
 		t.Fatalf("nil live client: %q", got)
+	}
+	// Same guard must cover major_order.
+	if got := e.Execute(t.Context(), "major_order", `{}`); !strings.Contains(got, "not wired") {
+		t.Fatalf("nil live client on major_order: %q", got)
 	}
 	// Same guard must cover planet_status: PlanetLine derefs the client's
 	// mutex, so an unwired Live would panic on &Executor{}.
@@ -175,9 +179,19 @@ func liveServer(t *testing.T, liveOK bool) *httptest.Server {
 		bodies["/war/status"] = marshal(map[string]any{"planetStatus": status})
 		bodies["/war/info"] = marshal(map[string]any{"planetInfos": infos})
 		bodies["/planets"] = marshal(names)
+		bodies["/war/major-orders"] = marshal([]any{map[string]any{
+			"progress":  []any{7, 0},
+			"expiresIn": 100,
+			"setting": map[string]any{
+				"overrideTitle": "MAJOR ORDER",
+				"overrideBrief": "Hold the line.",
+				"tasks":         []any{},
+				"rewards":       []any{},
+			},
+		}})
 	}
 	mux := http.NewServeMux()
-	for _, p := range []string{"/war/campaign", "/war/status", "/war/info", "/planets"} {
+	for _, p := range []string{"/war/campaign", "/war/status", "/war/info", "/planets", "/war/major-orders"} {
 		body := bodies[p]
 		mux.HandleFunc(p, func(w http.ResponseWriter, r *http.Request) {
 			if !liveOK {
@@ -202,6 +216,20 @@ func TestPlanetStatusOutageVsUnknown(t *testing.T) {
 	}
 	e = &Executor{Live: live.New(config.Config{HD2APIBase: liveServer(t, false).URL})}
 	if got := e.Execute(t.Context(), "planet_status", `{"name":"Mintoria"}`); !strings.Contains(got, "uplink as down") {
+		t.Fatalf("outage must report uplink down: %q", got)
+	}
+}
+
+// TestMajorOrderTool pins the issue-76 contract: a live feed answers with
+// the standing order verbatim, a dead feed reports the uplink down instead
+// of inventing an objective.
+func TestMajorOrderTool(t *testing.T) {
+	e := &Executor{Live: live.New(config.Config{HD2APIBase: liveServer(t, true).URL})}
+	if got := e.Execute(t.Context(), "major_order", `{}`); !strings.Contains(got, "MAJOR ORDER: Hold the line.") || !strings.HasSuffix(got, "Over.") {
+		t.Fatalf("live order must answer verbatim: %q", got)
+	}
+	e = &Executor{Live: live.New(config.Config{HD2APIBase: liveServer(t, false).URL})}
+	if got := e.Execute(t.Context(), "major_order", `{}`); !strings.Contains(got, "uplink as down") {
 		t.Fatalf("outage must report uplink down: %q", got)
 	}
 }

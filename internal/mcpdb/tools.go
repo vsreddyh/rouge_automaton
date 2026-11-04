@@ -30,7 +30,9 @@ answer from memory. Aliases resolve server-side, so pass the name you heard.
 When the name is unknown, list candidates first (list_units, list_gear),
 then fetch the exact doc. War status ("war status", "how goes the war",
 "what's the front") is one war_status call with no arguments, answered
-directly — never stall on an ack.
+directly — never stall on an ack. Major Order ("major order", "orders",
+"dispatch", "strategic threat") is one major_order call with no arguments,
+answered directly — never from memory or the wiki.
 Never narrate intent ("Checking...", "Looking it up...", "Pulling..."): if you
 need data, your whole response is exactly one function call, never an
 acknowledgement. Either emit the function call or the final answer — an ack
@@ -123,6 +125,9 @@ func ToolDefs() []gorelay.ToolDef {
 			Parameters: obj(map[string]any{
 				"name": strProp("exact planet name, e.g. Mintoria"),
 			}, "name")},
+		{Name: "major_order",
+			Description: "Live Major Order: standing High Command objective with kill/objective progress, expiry and reward, plus companion strategic-threat tasks. Takes no arguments — use for any Major Order or strategic-threat question instead of answering from memory or the wiki.",
+			Parameters:  obj(map[string]any{})},
 		{Name: "wiki_search",
 			Description: "Fall back to the Helldivers wiki when the database tools return nothing. Returns a summary with source link.",
 			Parameters: obj(map[string]any{
@@ -219,6 +224,14 @@ func (e *Executor) Execute(ctx context.Context, name, argsJSON string) string {
 			return line
 		}
 		return "live war API unreachable — report the uplink as down, never guess a war status"
+	case "major_order":
+		if e.Live == nil {
+			return "live war API not wired — report the uplink as down, never guess"
+		}
+		if line := e.Live.MajorOrder(ctx); line != "" {
+			return line
+		}
+		return "live war API unreachable — report the uplink as down, never guess a Major Order"
 	case "wiki_search":
 		query := strArg(args, "query")
 		if query == "" {
@@ -243,7 +256,7 @@ func (e *Executor) Execute(ctx context.Context, name, argsJSON string) string {
 			return "wiki has nothing on that either — report it as unconfirmed"
 		}
 	default:
-		return fmt.Sprintf("unknown tool %q — available: get_unit, list_units, get_gear, list_gear, get_place, war_status, planet_status, wiki_search", name)
+		return fmt.Sprintf("unknown tool %q — available: get_unit, list_units, get_gear, list_gear, get_place, war_status, planet_status, major_order, wiki_search", name)
 	}
 }
 

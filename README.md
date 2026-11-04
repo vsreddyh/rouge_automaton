@@ -91,7 +91,7 @@ podman run --rm --network=host --entrypoint /crawl \
 
 - Mention-gated replies (`require_mention: true`), `auto_thread: true`: a mention opens a thread and the answer lands inside it — follow-ups in threads the bot opened or has spoken in answer without a fresh mention (same relay session, keyed by thread ID). Strangers' threads still need a mention. Outside threads, a mention is required; configured free-response channels answer without a mention (each costs a model call — keep the list short).
 - Greetings (`hi`/`hello`/`hey`, also `yo`/`o7`): answered by the model in voice, whatever fits the moment — no canned line, no helpdesk menu, no "state target".
-- War-status questions (`what's the war status`, `how goes the front`) get a live summary of active fronts — no planet name required.
+- War-status questions (`what's the war status`, `how goes the front`) get a live summary of active fronts — no planet name required. Major Order questions (`major order`, `orders`, `dispatch`, `strategic threat`) get the standing High Command objective with progress, expiry and reward, plus companion strategic-threat tasks — never from memory.
 - Detail intel answers: weak point + counter + source (Mongo doc or live link), as fully as the question needs; roster answers (`list_units`, `list_gear`) give names and roles only and never volunteer weaknesses or counters (no word cap; the 2000-rune Discord cut is the transport limit).
 - Genuinely ambiguous questions with no tool to resolve them get one short clarifying question instead of a guess; anything a tool already covers is answered directly.
 
@@ -105,7 +105,9 @@ podman run --rm --network=host --entrypoint /crawl \
    `get_place` (one static planet/biome/mission by exact name),
    `war_status` (generic live war summary: active fronts per faction,
    hottest battles, divers deployed), `planet_status` (one named planet's
-   live data). Aliases resolve server-side; exact fetch returns the full
+   live data), `major_order` (standing High Command objective with
+   progress, expiry and reward, plus companion strategic-threat tasks;
+   no arguments). Aliases resolve server-side; exact fetch returns the full
    doc (role, weak points, counters, source), while list tools return a
    roster line (name, role or gear type, source). Every answer cites its
    source once.

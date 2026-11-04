@@ -29,9 +29,14 @@ type Client struct {
 	mu sync.RWMutex
 	at time.Time
 	// retry is the earliest a failed refresh may be retried: without it
-	// every call during an outage refires all four endpoints.
+	// every call during an outage refires all five endpoints.
 	retry time.Time
 	plans []map[string]any
+	// mo caches the standing assignments (Major Order plus
+	// strategic-threat tasks) from the same refresh; names resolves
+	// planet-index objectives against the shared index table.
+	mo    []map[string]any
+	names map[string]string
 }
 
 // New builds a Client from the bot config.
@@ -51,37 +56,55 @@ var sharedHTTP = &http.Client{Timeout: 20 * time.Second}
 // planets returns the cached roster, refreshing it past the 5-minute TTL.
 // The slice is shared and read-only: callers must not mutate it. A failed
 // refresh serves the cache (or nothing) and backs off 30 seconds so an
-// outage does not refire all four endpoints on every call.
+// outage does not refire all five endpoints on every call.
 func (c *Client) planets(ctx context.Context) []map[string]any {
+	return c.snapshot(ctx).plans
+}
+
+// snapshot returns the cached feed read, refreshing it past the 5-minute
+// TTL. One call, one epoch: liveness and assignments always come from the
+// same read, so concurrent refreshes can never mix them.
+func (c *Client) snapshot(ctx context.Context) snapshot {
 	c.mu.RLock()
-	cached, at, retry := c.plans, c.at, c.retry
+	plans, mo, names, at, retry := c.plans, c.mo, c.names, c.at, c.retry
 	c.mu.RUnlock()
-	if time.Since(at) < 5*time.Minute && cached != nil {
-		return cached
-	}
-	if time.Now().Before(retry) {
-		return cached
-	}
-	if fresh := c.refresh(ctx); fresh != nil {
+	if time.Since(at) >= 5*time.Minute || plans == nil {
+		if time.Now().Before(retry) {
+			return snapshot{plans: plans, mo: mo, names: names}
+		}
+		if fresh := c.refresh(ctx); fresh != nil {
+			c.mu.Lock()
+			c.plans, c.mo, c.names, c.at, c.retry = fresh.plans, fresh.mo, fresh.names, time.Now(), time.Time{}
+			c.mu.Unlock()
+			return *fresh
+		}
 		c.mu.Lock()
-		c.plans, c.at, c.retry = fresh, time.Now(), time.Time{}
+		if ctx.Err() == nil {
+			c.retry = time.Now().Add(30 * time.Second)
+		}
 		c.mu.Unlock()
-		return fresh
 	}
-	c.mu.Lock()
-	if ctx.Err() == nil {
-		c.retry = time.Now().Add(30 * time.Second)
-	}
-	c.mu.Unlock()
-	return cached
+	return snapshot{plans: plans, mo: mo, names: names}
+}
+
+// snapshot is one coherent feed read: the planet roster, the standing
+// assignments, and the index-to-name table the planet objectives resolve
+// against. refresh builds all three or nothing (see htmPaths).
+type snapshot struct {
+	plans []map[string]any
+	mo    []map[string]any
+	names map[string]string
 }
 
 // htmPaths are the Training Manual endpoints joined into one roster per
 // refresh, all rooted at Base: campaign carries the active-front detail
 // (faction, defense, expiry), status the galaxy-wide per-planet owners and
-// player counts, info the per-planet max health, and planets the
-// index-to-name table.
-var htmPaths = []string{"/war/campaign", "/war/status", "/war/info", "/planets"}
+// player counts, info the per-planet max health, planets the
+// index-to-name table, and major-orders the standing Major Order plus
+// strategic-threat tasks. One feed family, one lifecycle: any fetch or
+// decode failure returns nil so the caller keeps serving the cache (or
+// reports the uplink down when there is no cache at all).
+var htmPaths = []string{"/war/campaign", "/war/status", "/war/info", "/planets", "/war/major-orders"}
 
 // minRoster is the staleness floor for a full-roster refresh: the live
 // roster runs ~270 planets, so anything far smaller is a broken upstream
@@ -110,9 +133,10 @@ func fetchBody(ctx context.Context, client *http.Client, url, superClient, conta
 
 // refresh rebuilds the roster from the war API. Any fetch or decode failure
 // — or a stale-looking payload (implausibly small roster, zero divers
-// galaxy-wide) — returns nil so the caller keeps serving the cache, or
-// reports the uplink down when there is no cache at all.
-func (c *Client) refresh(ctx context.Context) []map[string]any {
+// galaxy-wide, ragged assignments) — returns nil so the caller keeps
+// serving the cache, or reports the uplink down when there is no cache
+// at all.
+func (c *Client) refresh(ctx context.Context) *snapshot {
 	bodies := make([][]byte, len(htmPaths))
 	errs := make([]error, len(htmPaths))
 	// Trim here (not in New) so direct &Client{Base: ...} literals,
@@ -136,6 +160,7 @@ func (c *Client) refresh(ctx context.Context) []map[string]any {
 	var campaign []map[string]any
 	var status, info map[string]any
 	var namesRaw any
+	var assignments []map[string]any
 	if err := json.Unmarshal(bodies[0], &campaign); err != nil {
 		return nil
 	}
@@ -148,7 +173,22 @@ func (c *Client) refresh(ctx context.Context) []map[string]any {
 	if err := json.Unmarshal(bodies[3], &namesRaw); err != nil {
 		return nil
 	}
-	return joinRoster(campaign, status, info, nameTable(namesRaw))
+	if err := json.Unmarshal(bodies[4], &assignments); err != nil {
+		return nil
+	}
+	// Every assignment must carry its setting block: a ragged feed is a
+	// broken snapshot, not a quiet front — fail like any other endpoint.
+	// An empty array is valid (no standing order) and flows through.
+	for _, a := range assignments {
+		if _, ok := a["setting"].(map[string]any); !ok {
+			return nil
+		}
+	}
+	names := nameTable(namesRaw)
+	if plans := joinRoster(campaign, status, info, names); plans != nil {
+		return &snapshot{plans: plans, mo: assignments, names: names}
+	}
+	return nil
 }
 
 // nameTable normalizes the planet name table to index->name: the API ships
@@ -311,34 +351,38 @@ func (c *Client) Up(ctx context.Context) bool {
 }
 
 func num(m map[string]any, key string) float64 {
-	// encoding/json decodes numbers into float64, but a type switch keeps
-	// DEFENSE classification and counts correct if the API ever emits an
-	// int shape (or tests construct one): without it eventType == 1 reads
-	// 0 and every defense misclassifies as campaign.
-	switch v := m[key].(type) {
+	return toFloat(m[key])
+}
+
+// toFloat coerces one decoded JSON scalar to a float, tolerating the
+// int/float/string shapes a mirror or a test may ship (encoding/json gives
+// float64 in production). NaN, Inf, and unparseable input read as 0 so a
+// malformed field can never poison arithmetic.
+func toFloat(v any) float64 {
+	switch n := v.(type) {
 	case float64:
-		if math.IsNaN(v) || math.IsInf(v, 0) {
+		if math.IsNaN(n) || math.IsInf(n, 0) {
 			return 0
 		}
-		return v
+		return n
 	case float32:
-		if math.IsNaN(float64(v)) || math.IsInf(float64(v), 0) {
+		if math.IsNaN(float64(n)) || math.IsInf(float64(n), 0) {
 			return 0
 		}
-		return float64(v)
+		return float64(n)
 	case int:
-		return float64(v)
+		return float64(n)
 	case int64:
-		return float64(v)
+		return float64(n)
 	case json.Number:
-		if f, err := v.Float64(); err == nil {
+		if f, err := n.Float64(); err == nil {
 			if math.IsNaN(f) || math.IsInf(f, 0) {
 				return 0
 			}
 			return f
 		}
 	case string:
-		if f, err := strconv.ParseFloat(strings.TrimSpace(v), 64); err == nil {
+		if f, err := strconv.ParseFloat(strings.TrimSpace(n), 64); err == nil {
 			if math.IsNaN(f) || math.IsInf(f, 0) {
 				return 0
 			}
@@ -535,4 +579,170 @@ func (c *Client) WarStatus(ctx context.Context) string {
 	}
 	return fmt.Sprintf("War status: %d active %s — %s. Hottest: %s. %.0f divers deployed. Over.",
 		len(fronts), noun, strings.Join(tally, ", "), strings.Join(parts, "; "), divers)
+}
+
+// MajorOrder answers "what is the Major Order" with the standing High
+// Command objective: brief, kill/objective progress, expiry and reward.
+// Companions (STRATEGIC THREAT tasks) ride along, so a "strategic threat"
+// question resolves too. Empty means the feed gave us nothing at all
+// (outage, no cache), so the caller reports a dead uplink instead of
+// inventing an objective. A live feed with no assignments says so
+// explicitly — never an uplink-down.
+func (c *Client) MajorOrder(ctx context.Context) string {
+	snap := c.snapshot(ctx)
+	if len(snap.plans) == 0 {
+		return ""
+	}
+	now := time.Now()
+	// The MAJOR ORDER title is the contract: a threats-only feed says no
+	// order is standing and reports the threats, rather than headlining a
+	// STRATEGIC THREAT as the Major Order.
+	idx := findMajorOrderIdx(snap.mo)
+	line := ""
+	if idx >= 0 {
+		line = formatAssignment(snap.mo[idx], snap.names, now)
+	}
+	// Companions are capped at three so a growing feed can never blow the
+	// Discord cut. Entries without a human brief carry nothing quotable;
+	// title-less ones are skipped rather than given a default headline.
+	companions := 0
+	for i, a := range snap.mo {
+		if i == idx {
+			continue
+		}
+		setting, _ := a["setting"].(map[string]any)
+		if strings.TrimSpace(str(setting, "overrideBrief")) == "" {
+			continue
+		}
+		if strings.TrimSpace(str(setting, "overrideTitle")) == "" {
+			continue
+		}
+		if companions >= 3 {
+			break
+		}
+		companions++
+		if line == "" {
+			line = formatAssignment(a, snap.names, now)
+			continue
+		}
+		line += " " + formatAssignment(a, snap.names, now)
+	}
+	if line == "" {
+		return "No standing Major Order on the wire right now. Over."
+	}
+	if idx < 0 {
+		line = "No standing Major Order. " + line
+	}
+	return line + " Over."
+}
+
+// findMajorOrderIdx returns the position of the entry titled MAJOR ORDER,
+// or -1. Title-only on purpose: the feed carries strategic threats beside
+// the order, and promoting the first brief-carrying entry would answer a
+// Major Order question with a threat headline.
+func findMajorOrderIdx(mo []map[string]any) int {
+	for i, a := range mo {
+		setting, _ := a["setting"].(map[string]any)
+		if strings.EqualFold(strings.TrimSpace(str(setting, "overrideTitle")), "major order") {
+			return i
+		}
+	}
+	return -1
+}
+
+// fvalAt reads a positional number from a task values/progress list:
+// the feed ships floats, but ints and numeric strings ride the same JSON
+// through mirrors and tests, so toFloat handles every shape. Short lists
+// read 0 instead of panicking.
+func fvalAt(list []any, i int) float64 {
+	if i < 0 || i >= len(list) {
+		return 0
+	}
+	return toFloat(list[i])
+}
+
+// firstReward names the headline reward: type 1 is medals (the only reward
+// the feed has ever paid on assignments); anything else prints generically
+// rather than guessing a currency.
+func firstReward(setting map[string]any) string {
+	list, _ := setting["rewards"].([]any)
+	if len(list) == 0 {
+		return ""
+	}
+	rw, ok := list[0].(map[string]any)
+	if !ok {
+		return ""
+	}
+	if amount := num(rw, "amount"); amount > 0 {
+		if int(num(rw, "type")) == 1 {
+			return fmt.Sprintf("Reward: %.0f medals", amount)
+		}
+		return fmt.Sprintf("Reward: %.0f", amount)
+	}
+	return ""
+}
+
+// formatAssignment renders one assignment: title + brief, planet
+// objectives resolved against the name table, kill progress paired by
+// task position (progress[i] counts toward tasks[i]; the type-3 kill
+// target rides values[2]), expiry, and reward. No sign-off: the caller
+// terminates the joined line once, so companions never double it.
+func formatAssignment(a map[string]any, names map[string]string, now time.Time) string {
+	setting, _ := a["setting"].(map[string]any)
+	title := strings.TrimSpace(str(setting, "overrideTitle"))
+	if title == "" {
+		title = "Major Order"
+	}
+	brief := strings.TrimSpace(str(setting, "overrideBrief"))
+	if brief == "" {
+		brief = strings.TrimSpace(str(setting, "taskDescription"))
+	}
+	if brief == "" {
+		brief = title
+	}
+	brief = strings.TrimRight(brief, ".")
+	var tasks []any
+	if tl, ok := setting["tasks"].([]any); ok {
+		tasks = tl
+	}
+	var progress []any
+	if pl, ok := a["progress"].([]any); ok {
+		progress = pl
+	}
+	var parts []string
+	var worlds []string
+	for i, raw := range tasks {
+		task, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		vals, _ := task["values"].([]any)
+		switch int(num(task, "type")) {
+		case 3: // kill count: values[2] carries the mandated number.
+			target := fvalAt(vals, 2)
+			if target <= 0 {
+				continue
+			}
+			done := fvalAt(progress, i)
+			parts = append(parts, fmt.Sprintf("Progress %.0f of %.0f (%.1f%%)", done, target, 100*done/target))
+		case 13: // planet objective: values[2] is the planet index.
+			if name := names[strconv.Itoa(int(fvalAt(vals, 2)))]; strings.TrimSpace(name) != "" {
+				worlds = append(worlds, strings.TrimSpace(name))
+			}
+		}
+	}
+	line := title + ": " + brief + "."
+	if len(worlds) > 0 {
+		line += " Objectives: " + strings.Join(worlds, ", ") + "."
+	}
+	for _, p := range parts {
+		line += " " + p + "."
+	}
+	if exp := num(a, "expiresIn"); exp > 0 {
+		line += " Ends " + now.Add(time.Duration(exp*float64(time.Second))).Format("Jan 2") + "."
+	}
+	if rw := firstReward(setting); rw != "" {
+		line += " " + rw + "."
+	}
+	return line
 }
