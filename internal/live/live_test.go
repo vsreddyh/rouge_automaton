@@ -391,9 +391,9 @@ func moFixture(t *testing.T, brief string, progress, target, expiresIn float64, 
 		prog = append(prog, 0)
 	}
 	raw, err := json.Marshal([]map[string]any{{
-		"progress":  prog,
+		"progress":   prog,
 		"expiresIn": expiresIn,
-		"setting": map[string]any{
+		"setting":    map[string]any{
 			"overrideTitle": "MAJOR ORDER",
 			"overrideBrief": brief,
 			"tasks":         tasks,
