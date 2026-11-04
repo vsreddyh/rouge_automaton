@@ -393,7 +393,7 @@ func moEntry(brief string, progress, target, expiresIn float64, planetIdx int) m
 	return map[string]any{
 		"progress":  prog,
 		"expiresIn": expiresIn,
-		"setting":   map[string]any{
+		"setting": map[string]any{
 			"overrideTitle": "MAJOR ORDER",
 			"overrideBrief": brief,
 			"tasks":         tasks,
@@ -414,7 +414,7 @@ func stEntry(brief string, expiresIn float64, planetIdxs ...int) map[string]any 
 	return map[string]any{
 		"progress":  prog,
 		"expiresIn": expiresIn,
-		"setting":   map[string]any{
+		"setting": map[string]any{
 			"overrideTitle": "STRATEGIC THREAT",
 			"overrideBrief": brief,
 			"tasks":         tasks,
@@ -514,7 +514,7 @@ func TestMajorOrderCompanionCap(t *testing.T) {
 	blank := map[string]any{
 		"progress":  []any{0},
 		"expiresIn": 100,
-		"setting":   map[string]any{
+		"setting": map[string]any{
 			"overrideTitle": "",
 			"overrideBrief": "Blank headline.",
 			"tasks":         []any{},

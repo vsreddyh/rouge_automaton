@@ -182,7 +182,7 @@ func liveServer(t *testing.T, liveOK bool) *httptest.Server {
 		bodies["/war/major-orders"] = marshal([]any{map[string]any{
 			"progress":  []any{7, 0},
 			"expiresIn": 100,
-			"setting":   map[string]any{
+			"setting": map[string]any{
 				"overrideTitle": "MAJOR ORDER",
 				"overrideBrief": "Hold the line.",
 				"tasks":         []any{},
