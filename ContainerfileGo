@@ -1,7 +1,7 @@
 # Rouge Automaton (Go) — static binary, distroless runtime.
 # Build behind host networking (rootless Podman has no DNS on the default
 # build network): podman build --network=host -f ContainerfileGo .
-FROM docker.io/library/golang:1.25 AS build
+FROM docker.io/library/golang:1.27 AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
